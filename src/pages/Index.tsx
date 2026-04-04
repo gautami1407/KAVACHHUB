@@ -1,5 +1,7 @@
 import { Link } from "react-router-dom";
-import { Heart, Ambulance, Hospital, TrafficCone, Shield, ArrowRight, Zap } from "lucide-react";
+import { Heart, Ambulance, Hospital, TrafficCone, Shield, ArrowRight, Zap, Activity, Clock, CheckCircle } from "lucide-react";
+import { GreenCorridorScene } from "@/components/GreenCorridorScene";
+import { NetworkStatus } from "@/components/NetworkStatus";
 
 const roles = [
   {
@@ -7,8 +9,7 @@ const roles = [
     description: "Trigger SOS, track ambulance, get pre-hospital assistance",
     icon: Heart,
     path: "/patient",
-    color: "from-destructive/20 to-destructive/5",
-    border: "hover:border-destructive/40",
+    accent: "bg-destructive/10 border-destructive/20",
     iconColor: "text-destructive",
   },
   {
@@ -16,8 +17,7 @@ const roles = [
     description: "Receive alerts, navigate with green corridor, communicate",
     icon: Ambulance,
     path: "/ambulance",
-    color: "from-primary/20 to-primary/5",
-    border: "hover:border-primary/40",
+    accent: "bg-primary/10 border-primary/20",
     iconColor: "text-primary",
   },
   {
@@ -25,8 +25,7 @@ const roles = [
     description: "Manage beds, staff, incoming patients, and analytics",
     icon: Hospital,
     path: "/hospital",
-    color: "from-success/20 to-success/5",
-    border: "hover:border-success/40",
+    accent: "bg-success/10 border-success/20",
     iconColor: "text-success",
   },
   {
@@ -34,18 +33,23 @@ const roles = [
     description: "Monitor signals, activate green corridors, track ambulances",
     icon: TrafficCone,
     path: "/traffic",
-    color: "from-warning/20 to-warning/5",
-    border: "hover:border-warning/40",
+    accent: "bg-warning/10 border-warning/20",
     iconColor: "text-warning",
   },
+];
+
+const stats = [
+  { label: "Avg Response", value: "4.2 min", icon: Clock },
+  { label: "Lives Saved", value: "12,847", icon: CheckCircle },
+  { label: "Active Units", value: "342", icon: Activity },
 ];
 
 export default function Index() {
   return (
     <div className="min-h-screen bg-background flex flex-col">
       {/* Header */}
-      <header className="border-b border-border bg-card/50 backdrop-blur-xl">
-        <div className="max-w-6xl mx-auto px-4 md:px-6 py-4 flex items-center justify-between">
+      <header className="border-b border-border bg-card/80 backdrop-blur-xl sticky top-0 z-50">
+        <div className="max-w-6xl mx-auto px-4 md:px-6 py-3 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="p-2 rounded-xl bg-destructive/10 border border-destructive/20">
               <Shield className="w-5 h-5 text-destructive" />
@@ -55,48 +59,89 @@ export default function Index() {
               <p className="text-[10px] text-muted-foreground uppercase tracking-widest">Emergency Response Ecosystem</p>
             </div>
           </div>
-          <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-success/10 border border-success/20 text-xs text-success font-medium">
-            <span className="w-1.5 h-1.5 rounded-full bg-success animate-pulse" />
-            System Online
+          <div className="flex items-center gap-2">
+            <NetworkStatus />
+            <div className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-success/10 border border-success/20 text-xs text-success font-medium">
+              <span className="w-1.5 h-1.5 rounded-full bg-success animate-pulse" />
+              System Online
+            </div>
           </div>
         </div>
       </header>
 
       {/* Hero */}
-      <div className="flex-1 flex flex-col items-center justify-center px-4 py-12 md:py-20">
-        <div className="text-center mb-12 max-w-2xl">
-          <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-destructive/10 border border-destructive/20 text-destructive text-xs font-semibold mb-6 animate-fade-in-up">
-            <Zap className="w-3.5 h-3.5" />
-            Intelligent End-to-End Emergency Response
+      <div className="flex-1">
+        <div className="max-w-6xl mx-auto px-4 py-10 md:py-16">
+          <div className="text-center mb-10">
+            <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-destructive/5 border border-destructive/15 text-destructive text-xs font-semibold mb-5 animate-fade-in-up">
+              <Zap className="w-3.5 h-3.5" />
+              Intelligent End-to-End Emergency Response
+            </div>
+            <h2 className="text-3xl md:text-5xl font-black tracking-tight mb-4 animate-fade-in-up" style={{ animationDelay: "0.1s" }}>
+              Every Second{" "}
+              <span className="text-destructive">Counts</span>
+            </h2>
+            <p className="text-muted-foreground text-sm md:text-base max-w-lg mx-auto animate-fade-in-up" style={{ animationDelay: "0.2s" }}>
+              Connecting patients, ambulances, hospitals, and traffic systems in real-time for faster emergency response.
+            </p>
           </div>
-          <h2 className="text-3xl md:text-5xl font-black tracking-tight mb-4 animate-fade-in-up" style={{ animationDelay: "0.1s" }}>
-            Every Second{" "}
-            <span className="text-destructive">Counts</span>
-          </h2>
-          <p className="text-muted-foreground text-sm md:text-base max-w-lg mx-auto animate-fade-in-up" style={{ animationDelay: "0.2s" }}>
-            Connecting patients, ambulances, hospitals, and traffic systems in real-time for faster emergency response.
-          </p>
-        </div>
 
-        {/* Role Cards */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 w-full max-w-3xl">
-          {roles.map((role, i) => (
-            <Link
-              key={role.path}
-              to={role.path}
-              className={`group glass-card-hover !p-6 animate-fade-in-up ${role.border}`}
-              style={{ animationDelay: `${0.3 + i * 0.1}s` }}
-            >
-              <div className={`w-12 h-12 rounded-2xl bg-gradient-to-br ${role.color} flex items-center justify-center mb-4 group-hover:scale-110 transition-transform`}>
-                <role.icon className={`w-6 h-6 ${role.iconColor}`} />
+          {/* Stats strip */}
+          <div className="flex justify-center gap-6 md:gap-10 mb-10 animate-fade-in-up" style={{ animationDelay: "0.25s" }}>
+            {stats.map(s => (
+              <div key={s.label} className="text-center">
+                <s.icon className="w-5 h-5 text-primary mx-auto mb-1" />
+                <div className="text-xl md:text-2xl font-black">{s.value}</div>
+                <div className="text-[10px] text-muted-foreground uppercase tracking-wider">{s.label}</div>
               </div>
-              <h3 className="font-bold text-base mb-1 flex items-center gap-2">
-                {role.title}
-                <ArrowRight className="w-4 h-4 text-muted-foreground group-hover:translate-x-1 transition-transform" />
-              </h3>
-              <p className="text-sm text-muted-foreground leading-relaxed">{role.description}</p>
-            </Link>
-          ))}
+            ))}
+          </div>
+
+          {/* Role Cards */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-3xl mx-auto mb-12">
+            {roles.map((role, i) => (
+              <Link
+                key={role.path}
+                to={role.path}
+                className="group glass-card-hover !p-6 animate-fade-in-up"
+                style={{ animationDelay: `${0.3 + i * 0.08}s` }}
+              >
+                <div className={`w-11 h-11 rounded-xl ${role.accent} border flex items-center justify-center mb-4 group-hover:scale-110 transition-transform`}>
+                  <role.icon className={`w-5 h-5 ${role.iconColor}`} />
+                </div>
+                <h3 className="font-bold text-base mb-1 flex items-center gap-2">
+                  {role.title}
+                  <ArrowRight className="w-4 h-4 text-muted-foreground group-hover:translate-x-1 transition-transform" />
+                </h3>
+                <p className="text-sm text-muted-foreground leading-relaxed">{role.description}</p>
+              </Link>
+            ))}
+          </div>
+
+          {/* 3D Corridor Section */}
+          <div className="animate-fade-in-up" style={{ animationDelay: "0.6s" }}>
+            <div className="text-center mb-6">
+              <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-success/10 border border-success/20 text-success text-xs font-semibold mb-3">
+                <Zap className="w-3 h-3" />
+                SHOWSTOPPER
+              </div>
+              <h3 className="text-2xl md:text-3xl font-black tracking-tight">3D Green Corridor Simulation</h3>
+              <p className="text-sm text-muted-foreground mt-2 max-w-md mx-auto">
+                Watch traffic signals dynamically turn green as the ambulance approaches — cars clear the path in real-time.
+              </p>
+            </div>
+            <div className="glass-card overflow-hidden">
+              <GreenCorridorScene className="h-[350px] md:h-[450px] w-full" />
+              <div className="p-4 border-t border-border flex flex-wrap items-center justify-between gap-3">
+                <div className="flex items-center gap-4 text-xs text-muted-foreground">
+                  <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-destructive" /> Ambulance</span>
+                  <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-success" /> Green Signal</span>
+                  <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-success/30" /> Corridor Path</span>
+                </div>
+                <span className="text-[10px] text-muted-foreground uppercase tracking-wider">Real-time 3D Simulation</span>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 

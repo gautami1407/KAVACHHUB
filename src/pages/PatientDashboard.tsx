@@ -1,10 +1,13 @@
 import { useState, useEffect } from "react";
-import { MapPin, Phone, QrCode, Mic, Heart, User, Clock, Ambulance, Hospital, ChevronRight, Volume2, Shield } from "lucide-react";
+import { MapPin, Phone, QrCode, Heart, User, ChevronRight, Volume2, Shield, Eye, EyeOff } from "lucide-react";
 import { GlassCard } from "@/components/GlassCard";
 import { RoleHeader } from "@/components/RoleHeader";
 import { VoiceButton } from "@/components/VoiceButton";
 import { StatusBadge } from "@/components/StatusBadge";
 import { MapPlaceholder } from "@/components/MapPlaceholder";
+import { EmergencyTimeline } from "@/components/EmergencyTimeline";
+import { SeverityIndicator } from "@/components/SeverityIndicator";
+import { PrivacyToggle } from "@/components/PrivacyToggle";
 
 const assistSteps = [
   { step: 1, text: "Check if the person is breathing", done: true },
@@ -22,35 +25,57 @@ const contacts = [
 export default function PatientDashboard() {
   const [sosActive, setSosActive] = useState(false);
   const [eta, setEta] = useState(5);
-  const [status, setStatus] = useState<"idle" | "detecting" | "assigned" | "enroute">("idle");
+  const [status, setStatus] = useState<"idle" | "detecting" | "assigned" | "enroute" | "corridor" | "arrived">("idle");
   const [ambulancePos, setAmbulancePos] = useState(10);
+  const [privacyMode, setPrivacyMode] = useState(false);
 
   const triggerSOS = () => {
     setSosActive(true);
     setStatus("detecting");
     setTimeout(() => setStatus("assigned"), 1500);
     setTimeout(() => setStatus("enroute"), 3000);
+    setTimeout(() => setStatus("corridor"), 6000);
   };
 
   useEffect(() => {
-    if (status !== "enroute") return;
+    if (status !== "enroute" && status !== "corridor") return;
     const interval = setInterval(() => {
       setEta(e => Math.max(1, e - 1));
-      setAmbulancePos(p => Math.min(90, p + 15));
+      setAmbulancePos(p => Math.min(90, p + 12));
     }, 3000);
     return () => clearInterval(interval);
   }, [status]);
+
+  const timelineSteps = [
+    { label: "Triggered", status: status !== "idle" ? "done" as const : "pending" as const },
+    { label: "Ambulance Assigned", status: status === "assigned" || status === "enroute" || status === "corridor" ? "done" as const : status === "detecting" ? "active" as const : "pending" as const },
+    { label: "En Route", status: status === "enroute" || status === "corridor" ? "done" as const : status === "assigned" ? "active" as const : "pending" as const },
+    { label: "Corridor Active", status: status === "corridor" ? "done" as const : status === "enroute" ? "active" as const : "pending" as const },
+    { label: "At Hospital", status: status === "arrived" ? "done" as const : status === "corridor" ? "active" as const : "pending" as const },
+  ];
 
   return (
     <div className="min-h-screen bg-background">
       <RoleHeader title="Patient Portal" icon={Heart} />
       
       <div className="max-w-6xl mx-auto p-4 md:p-6 space-y-5">
+        {/* Privacy + Severity bar */}
+        <div className="flex items-center justify-between">
+          <SeverityIndicator level={status === "idle" ? "stable" : "critical"} />
+          <PrivacyToggle enabled={privacyMode} onToggle={() => setPrivacyMode(!privacyMode)} />
+        </div>
+
+        {/* Timeline */}
+        {sosActive && (
+          <GlassCard className="animate-fade-in-up">
+            <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-4">Emergency Timeline</h3>
+            <EmergencyTimeline steps={timelineSteps} />
+          </GlassCard>
+        )}
+
         {/* SOS Section */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
           <GlassCard className="flex flex-col items-center justify-center py-10 relative overflow-hidden">
-            <div className="absolute inset-0 bg-gradient-to-b from-destructive/5 to-transparent pointer-events-none" />
-            
             {/* SOS Button */}
             <div className="relative mb-6">
               {sosActive && (
@@ -62,10 +87,10 @@ export default function PatientDashboard() {
               <button
                 onClick={triggerSOS}
                 disabled={sosActive}
-                className={`relative z-10 w-32 h-32 rounded-full flex flex-col items-center justify-center font-black text-2xl transition-all duration-300 border-4 ${
+                className={`relative z-10 w-32 h-32 rounded-full flex flex-col items-center justify-center font-black text-2xl transition-all duration-300 border-4 shadow-xl ${
                   sosActive
-                    ? "bg-destructive text-destructive-foreground border-destructive animate-sos-pulse cursor-not-allowed"
-                    : "bg-destructive/90 text-destructive-foreground border-destructive/50 hover:bg-destructive hover:scale-105 active:scale-95"
+                    ? "bg-destructive text-destructive-foreground border-destructive/50 animate-sos-pulse cursor-not-allowed"
+                    : "bg-destructive text-destructive-foreground border-destructive/30 hover:scale-105 active:scale-95 shadow-destructive/20"
                 }`}
               >
                 <Shield className="w-8 h-8 mb-1" />
@@ -78,6 +103,7 @@ export default function PatientDashboard() {
               {status === "detecting" && "🔍 Detecting emergency…"}
               {status === "assigned" && "✅ Ambulance Assigned"}
               {status === "enroute" && `🚑 ETA: ${eta} minutes`}
+              {status === "corridor" && `🟢 Green Corridor Active — ETA: ${eta} min`}
             </p>
 
             <VoiceButton />
@@ -90,14 +116,14 @@ export default function PatientDashboard() {
                 <MapPin className="w-4 h-4 text-primary" />
                 <h3 className="font-semibold text-sm">Location & Status</h3>
               </div>
-              <div className="text-xs text-muted-foreground mb-3">
+              <div className={`text-xs text-muted-foreground mb-3 ${privacyMode ? "blur-sm select-none" : ""}`}>
                 📍 Sector 62, Noida, UP — 201301
               </div>
               <div className="space-y-2">
                 <StatusStep label="Emergency Detected" active={status !== "idle"} done={status !== "idle"} />
-                <StatusStep label="Ambulance Assigned" active={status === "assigned" || status === "enroute"} done={status === "enroute"} />
-                <StatusStep label={`ETA: ${eta} minutes`} active={status === "enroute"} />
-                <StatusStep label="Hospital Selected: AIIMS Delhi" active={status === "enroute"} />
+                <StatusStep label="Ambulance Assigned" active={status === "assigned" || status === "enroute" || status === "corridor"} done={status === "enroute" || status === "corridor"} />
+                <StatusStep label={`ETA: ${eta} minutes`} active={status === "enroute" || status === "corridor"} />
+                <StatusStep label="Hospital Selected: AIIMS Delhi" active={status === "enroute" || status === "corridor"} />
               </div>
             </GlassCard>
 
@@ -107,10 +133,10 @@ export default function PatientDashboard() {
                 <h3 className="font-semibold text-sm">SafeRide QR</h3>
               </div>
               <div className="flex items-center gap-4">
-                <div className="w-20 h-20 bg-foreground/10 rounded-xl flex items-center justify-center border border-border">
-                  <QrCode className="w-10 h-10 text-foreground/40" />
+                <div className="w-20 h-20 bg-secondary rounded-xl flex items-center justify-center border border-border">
+                  <QrCode className="w-10 h-10 text-muted-foreground/30" />
                 </div>
-                <div className="flex-1 space-y-2">
+                <div className={`flex-1 space-y-2 ${privacyMode ? "blur-sm select-none" : ""}`}>
                   <div className="text-xs text-muted-foreground">Blood Type: <span className="text-foreground font-medium">O+</span></div>
                   <div className="text-xs text-muted-foreground">Allergies: <span className="text-foreground font-medium">Penicillin</span></div>
                   <button className="text-xs text-primary hover:underline flex items-center gap-1">
@@ -135,14 +161,14 @@ export default function PatientDashboard() {
                 <Heart className="w-4 h-4 text-destructive" />
                 <h3 className="font-semibold text-sm">Pre-Hospital Assist</h3>
               </div>
-              <button className="p-2 rounded-lg bg-primary/10 hover:bg-primary/20 transition-colors">
+              <button className="p-2 rounded-lg bg-primary/10 hover:bg-primary/15 transition-colors">
                 <Volume2 className="w-4 h-4 text-primary" />
               </button>
             </div>
             <div className="space-y-2">
               {assistSteps.map((s) => (
                 <div key={s.step} className={`flex items-center gap-3 p-3 rounded-xl border transition-all ${
-                  s.done ? "bg-success/5 border-success/20" : "bg-secondary/50 border-border"
+                  s.done ? "bg-success/5 border-success/15" : "bg-secondary/50 border-border"
                 }`}>
                   <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold shrink-0 ${
                     s.done ? "bg-success text-success-foreground" : "bg-muted text-muted-foreground"
@@ -161,13 +187,13 @@ export default function PatientDashboard() {
             <div className="space-y-2">
               {contacts.map((c) => (
                 <div key={c.name} className="flex items-center justify-between p-3 rounded-xl bg-secondary/50 border border-border">
-                  <div>
+                  <div className={privacyMode ? "blur-sm select-none" : ""}>
                     <div className="text-sm font-medium">{c.name}</div>
                     <div className="text-xs text-muted-foreground">{c.relation}</div>
                   </div>
                   <div className="flex items-center gap-2">
                     <StatusBadge severity="success">{c.status}</StatusBadge>
-                    <button className="p-2 rounded-lg bg-primary/10 hover:bg-primary/20">
+                    <button className="p-2 rounded-lg bg-primary/10 hover:bg-primary/15">
                       <Phone className="w-3.5 h-3.5 text-primary" />
                     </button>
                   </div>
@@ -185,7 +211,7 @@ function StatusStep({ label, active, done }: { label: string; active?: boolean; 
   return (
     <div className="flex items-center gap-3">
       <div className={`w-3 h-3 rounded-full border-2 transition-all ${
-        done ? "bg-success border-success" : active ? "border-primary bg-primary/30 animate-pulse" : "border-muted-foreground/30"
+        done ? "bg-success border-success" : active ? "border-primary bg-primary/20 animate-pulse" : "border-border"
       }`} />
       <span className={`text-sm ${active || done ? "text-foreground" : "text-muted-foreground/50"}`}>{label}</span>
     </div>

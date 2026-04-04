@@ -18,8 +18,8 @@ export function VoiceButton({ onStatusChange }: { onStatusChange?: (listening: b
       className={cn(
         "relative flex items-center gap-3 px-5 py-3 rounded-2xl font-medium transition-all duration-300 border",
         listening
-          ? "bg-primary/20 border-primary/50 text-primary"
-          : "bg-secondary border-border text-muted-foreground hover:text-foreground hover:border-primary/30"
+          ? "bg-primary/10 border-primary/30 text-primary"
+          : "bg-secondary border-border text-muted-foreground hover:text-foreground hover:border-primary/20"
       )}
     >
       <Mic className="w-5 h-5" />
