@@ -1,5 +1,6 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { MapPin, Phone, QrCode, Heart, User, ChevronRight, Volume2, Shield, Smartphone, AlertTriangle } from "lucide-react";
+import { QRCodeSVG } from "qrcode.react";
 import { GlassCard } from "@/components/GlassCard";
 import { RoleHeader } from "@/components/RoleHeader";
 import { VoiceButton } from "@/components/VoiceButton";
@@ -11,48 +12,52 @@ import { PrivacyToggle } from "@/components/PrivacyToggle";
 import { MiniAnalytics } from "@/components/MiniAnalytics";
 import { NotificationPanel } from "@/components/NotificationPanel";
 import { NetworkStatus } from "@/components/NetworkStatus";
-
-const assistSteps = [
-  { step: 1, text: "Check if the person is breathing", done: true },
-  { step: 2, text: "Apply pressure to any visible wound", done: true },
-  { step: 3, text: "Keep the person calm and still", done: false },
-  { step: 4, text: "Wait for ambulance to arrive", done: false },
-];
-
-const contacts = [
-  { name: "Rahul Kumar", relation: "Brother", status: "Alert Sent" },
-  { name: "Priya Sharma", relation: "Mother", status: "Alert Sent" },
-  { name: "Dr. Mehta", relation: "Doctor", status: "Notified" },
-];
+import { useAuth } from "@/hooks/useSupabaseAuth";
+import { useEmergency } from "@/hooks/useEmergency";
+import { useAmbulanceTracking } from "@/hooks/useAmbulanceTracking";
+import { supabase } from "@/lib/supabaseClient";
+import type { AssistInstruction } from "@/lib/database.types";
 
 export default function PatientDashboard() {
+  const { user, profile } = useAuth();
+  const {
+    activeEmergency,
+    patientData,
+    emergencyContacts,
+    assistSteps,
+    loading: emergencyLoading,
+    triggerEmergency,
+    fetchAssistInstructions,
+  } = useEmergency(user?.id);
+
+  const { ambulancePosition, eta, distance, updateETA } = useAmbulanceTracking(
+    activeEmergency?.ambulance_id || undefined
+  );
+
   const [sosActive, setSosActive] = useState(false);
-  const [eta, setEta] = useState(7);
-  const [status, setStatus] = useState<"idle" | "detecting" | "assigned" | "enroute" | "corridor" | "arrived">("idle");
-  const [ambulancePos, setAmbulancePos] = useState(5);
   const [privacyMode, setPrivacyMode] = useState(false);
-  const [assistProgress, setAssistProgress] = useState(assistSteps);
+  const [assistProgress, setAssistProgress] = useState<(AssistInstruction & { done: boolean })[]>([]);
+  const [hospitalName, setHospitalName] = useState<string>("");
+  const [ambulanceCode, setAmbulanceCode] = useState<string>("");
 
-  const triggerSOS = () => {
-    setSosActive(true);
-    setStatus("detecting");
-    setTimeout(() => setStatus("assigned"), 2000);
-    setTimeout(() => setStatus("enroute"), 4000);
-    setTimeout(() => setStatus("corridor"), 8000);
-  };
-
+  // Sync SOS state with active emergency
   useEffect(() => {
-    if (status !== "enroute" && status !== "corridor") return;
-    const interval = setInterval(() => {
-      setEta(e => Math.max(1, e - 1));
-      setAmbulancePos(p => Math.min(92, p + 8));
-    }, 3000);
-    return () => clearInterval(interval);
-  }, [status]);
+    if (activeEmergency && activeEmergency.status !== "completed") {
+      setSosActive(true);
+      fetchAssistInstructions(activeEmergency.emergency_type);
+    }
+  }, [activeEmergency, fetchAssistInstructions]);
+
+  // Convert assist steps to progress format
+  useEffect(() => {
+    if (assistSteps.length > 0) {
+      setAssistProgress(assistSteps.map((s, i) => ({ ...s, done: i < 2 })));
+    }
+  }, [assistSteps]);
 
   // Auto-progress assist steps
   useEffect(() => {
-    if (!sosActive) return;
+    if (!sosActive || assistProgress.length === 0) return;
     const t = setTimeout(() => {
       setAssistProgress(prev => {
         const next = [...prev];
@@ -60,15 +65,80 @@ export default function PatientDashboard() {
         if (idx !== -1) next[idx] = { ...next[idx], done: true };
         return next;
       });
-    }, 5000);
+    }, 8000);
     return () => clearTimeout(t);
   }, [sosActive, assistProgress]);
 
+  // Fetch hospital and ambulance names
+  useEffect(() => {
+    const fetchDetails = async () => {
+      if (activeEmergency?.hospital_id) {
+        const { data } = await supabase.from("hospitals").select("name").eq("id", activeEmergency.hospital_id).single();
+        if (data) setHospitalName(data.name);
+      }
+      if (activeEmergency?.ambulance_id) {
+        const { data } = await supabase.from("ambulances").select("unit_code").eq("id", activeEmergency.ambulance_id).single();
+        if (data) setAmbulanceCode(data.unit_code);
+      }
+    };
+    fetchDetails();
+  }, [activeEmergency]);
+
+  // Update ETA when ambulance or hospital position changes
+  useEffect(() => {
+    if (activeEmergency && ambulancePosition) {
+      updateETA(activeEmergency.location_lat, activeEmergency.location_lng);
+    }
+  }, [ambulancePosition, activeEmergency, updateETA]);
+
+  // Compute ambulance progress (0-100)
+  const ambulanceProgress = (() => {
+    if (!ambulancePosition || !activeEmergency) return 0;
+    const totalDist = distance || 5;
+    const progress = Math.min(95, Math.max(5, (1 - (totalDist / 10)) * 100));
+    return progress;
+  })();
+
+  const handleTriggerSOS = useCallback(async () => {
+    if (sosActive || emergencyLoading) return;
+    setSosActive(true);
+
+    let lat = 28.6139, lng = 77.2090;
+    if (navigator.geolocation) {
+      try {
+        const pos = await new Promise<GeolocationPosition>((resolve, reject) =>
+          navigator.geolocation.getCurrentPosition(resolve, reject, { timeout: 5000 })
+        );
+        lat = pos.coords.latitude;
+        lng = pos.coords.longitude;
+      } catch {
+        // Fallback to default coordinates
+      }
+    }
+
+    await triggerEmergency({
+      patientId: patientData?.id,
+      severity: "critical",
+      emergencyType: "General",
+      lat,
+      lng,
+      locationText: "Auto-detected location",
+    });
+  }, [sosActive, emergencyLoading, triggerEmergency, patientData]);
+
+  const handleVoiceTrigger = useCallback(async (detected: boolean) => {
+    if (detected && !sosActive) {
+      await handleTriggerSOS();
+    }
+  }, [sosActive, handleTriggerSOS]);
+
+  const status = activeEmergency?.status || "idle";
+
   const timelineSteps = [
     { label: "Triggered", status: status !== "idle" ? "done" as const : "pending" as const },
-    { label: "Ambulance Assigned", status: status === "assigned" || status === "enroute" || status === "corridor" ? "done" as const : status === "detecting" ? "active" as const : "pending" as const },
-    { label: "En Route", status: status === "enroute" || status === "corridor" ? "done" as const : status === "assigned" ? "active" as const : "pending" as const },
-    { label: "Corridor Active", status: status === "corridor" ? "done" as const : status === "enroute" ? "active" as const : "pending" as const },
+    { label: "Ambulance Assigned", status: (status === "assigned" || status === "enroute" || status === "corridor" || status === "arrived") ? "done" as const : status === "triggered" ? "active" as const : "pending" as const },
+    { label: "En Route", status: (status === "enroute" || status === "corridor" || status === "arrived") ? "done" as const : status === "assigned" ? "active" as const : "pending" as const },
+    { label: "Corridor Active", status: (status === "corridor" || status === "arrived") ? "done" as const : status === "enroute" ? "active" as const : "pending" as const },
     { label: "At Hospital", status: status === "arrived" ? "done" as const : status === "corridor" ? "active" as const : "pending" as const },
   ];
 
@@ -84,7 +154,7 @@ export default function PatientDashboard() {
       <div className="max-w-6xl mx-auto p-4 md:p-6 space-y-5">
         {/* Privacy + Severity bar */}
         <div className="flex items-center justify-between">
-          <SeverityIndicator level={status === "idle" ? "stable" : "critical"} />
+          <SeverityIndicator level={!sosActive ? "stable" : "critical"} />
           <PrivacyToggle enabled={privacyMode} onToggle={() => setPrivacyMode(!privacyMode)} />
         </div>
 
@@ -107,8 +177,8 @@ export default function PatientDashboard() {
                 </>
               )}
               <button
-                onClick={triggerSOS}
-                disabled={sosActive}
+                onClick={handleTriggerSOS}
+                disabled={sosActive || emergencyLoading}
                 className={`relative z-10 w-36 h-36 rounded-full flex flex-col items-center justify-center font-black text-2xl transition-all duration-300 border-4 shadow-xl ${
                   sosActive
                     ? "bg-destructive text-destructive-foreground border-destructive/50 animate-sos-pulse cursor-not-allowed"
@@ -121,16 +191,16 @@ export default function PatientDashboard() {
             </div>
 
             <p className="text-sm text-muted-foreground mb-4 text-center">
-              {status === "idle" && "Press for emergency help"}
-              {status === "detecting" && "🔍 Detecting emergency…"}
-              {status === "assigned" && "✅ Ambulance Assigned — Unit A-12"}
-              {status === "enroute" && `🚑 Ambulance En Route — ETA: ${eta} min`}
-              {status === "corridor" && `🟢 Green Corridor Active — ETA: ${eta} min`}
+              {!sosActive && "Press for emergency help"}
+              {status === "triggered" && "🔍 Detecting emergency…"}
+              {status === "assigned" && `✅ Ambulance Assigned — Unit ${ambulanceCode}`}
+              {status === "enroute" && `🚑 Ambulance En Route — ETA: ${eta || '...'} min`}
+              {status === "corridor" && `🟢 Green Corridor Active — ETA: ${eta || '...'} min`}
+              {status === "arrived" && "🏥 Ambulance has arrived!"}
             </p>
 
-            <VoiceButton />
+            <VoiceButton onEmergencyDetected={handleVoiceTrigger} />
 
-            {/* Crash detection indicator */}
             {!sosActive && (
               <div className="mt-4 flex items-center gap-2 text-xs text-muted-foreground">
                 <Smartphone className="w-3.5 h-3.5" />
@@ -148,14 +218,14 @@ export default function PatientDashboard() {
                 <h3 className="font-semibold text-sm">Location & Status</h3>
               </div>
               <div className={`text-xs text-muted-foreground mb-3 ${privacyMode ? "blur-sm select-none" : ""}`}>
-                📍 Sector 62, Noida, UP — 201301
+                📍 {activeEmergency?.location_text || "Waiting for location..."}
               </div>
               <div className="space-y-2">
-                <StatusStep label="Emergency Detected" active={status !== "idle"} done={status !== "idle"} />
-                <StatusStep label="Ambulance Assigned — Unit A-12" active={status === "assigned" || status === "enroute" || status === "corridor"} done={status === "enroute" || status === "corridor"} />
-                <StatusStep label={`ETA: ${eta} minutes`} active={status === "enroute" || status === "corridor"} />
+                <StatusStep label="Emergency Detected" active={sosActive} done={sosActive} />
+                <StatusStep label={`Ambulance Assigned — Unit ${ambulanceCode || '...'}`} active={status === "assigned" || status === "enroute" || status === "corridor"} done={status === "enroute" || status === "corridor"} />
+                <StatusStep label={`ETA: ${eta || '...'} minutes`} active={status === "enroute" || status === "corridor"} />
                 <StatusStep label="Green Corridor Activated" active={status === "corridor"} done={status === "corridor"} />
-                <StatusStep label="Hospital: AIIMS Delhi" active={status === "enroute" || status === "corridor"} />
+                <StatusStep label={`Hospital: ${hospitalName || '...'}`} active={status === "enroute" || status === "corridor"} />
               </div>
             </GlassCard>
 
@@ -165,13 +235,21 @@ export default function PatientDashboard() {
                 <h3 className="font-semibold text-sm">SafeRide QR</h3>
               </div>
               <div className="flex items-center gap-4">
-                <div className="w-20 h-20 bg-secondary rounded-xl flex items-center justify-center border border-border">
-                  <QrCode className="w-10 h-10 text-muted-foreground/30" />
+                <div className="w-20 h-20 bg-white rounded-xl flex items-center justify-center border border-border p-1">
+                  {patientData ? (
+                    <QRCodeSVG
+                      value={patientData.emergency_id_code}
+                      size={72}
+                      level="M"
+                    />
+                  ) : (
+                    <QrCode className="w-10 h-10 text-muted-foreground/30" />
+                  )}
                 </div>
                 <div className={`flex-1 space-y-2 ${privacyMode ? "blur-sm select-none" : ""}`}>
-                  <div className="text-xs text-muted-foreground">Blood Type: <span className="text-foreground font-medium">O+</span></div>
-                  <div className="text-xs text-muted-foreground">Allergies: <span className="text-foreground font-medium">Penicillin</span></div>
-                  <div className="text-xs text-muted-foreground">Emergency ID: <span className="text-foreground font-mono font-medium">JS-2024-8847</span></div>
+                  <div className="text-xs text-muted-foreground">Blood Type: <span className="text-foreground font-medium">{patientData?.blood_group || "Not set"}</span></div>
+                  <div className="text-xs text-muted-foreground">Allergies: <span className="text-foreground font-medium">{patientData?.allergies || "None"}</span></div>
+                  <div className="text-xs text-muted-foreground">Emergency ID: <span className="text-foreground font-mono font-medium">{patientData?.emergency_id_code || "..."}</span></div>
                   <button className="text-xs text-primary hover:underline flex items-center gap-1">
                     Update Details <ChevronRight className="w-3 h-3" />
                   </button>
@@ -182,17 +260,23 @@ export default function PatientDashboard() {
         </div>
 
         {/* Live Map */}
-        {sosActive && (
-          <LiveMap className="h-64 md:h-80 animate-fade-in-up" showRoute ambulanceProgress={ambulancePos}>
+        {sosActive && activeEmergency && (
+          <LiveMap
+            className="h-64 md:h-80 animate-fade-in-up"
+            showRoute
+            ambulanceProgress={ambulanceProgress}
+            startCoords={[activeEmergency.location_lat, activeEmergency.location_lng]}
+            endCoords={hospitalName ? undefined : undefined}
+          >
             <div className="absolute bottom-3 left-3 z-[1000] bg-card/95 backdrop-blur-sm p-3 rounded-xl border border-border shadow-lg">
               <div className="flex items-center gap-4">
                 <div className="text-center">
-                  <div className="text-2xl font-black text-foreground animate-count-pulse">{eta}</div>
+                  <div className="text-2xl font-black text-foreground animate-count-pulse">{eta || '...'}</div>
                   <div className="text-[10px] text-muted-foreground uppercase tracking-wider">min</div>
                 </div>
                 <div className="w-px h-10 bg-border" />
                 <div className="text-center">
-                  <div className="text-2xl font-black text-foreground">{(eta * 0.6).toFixed(1)}</div>
+                  <div className="text-2xl font-black text-foreground">{distance?.toFixed(1) || '...'}</div>
                   <div className="text-[10px] text-muted-foreground uppercase tracking-wider">km</div>
                 </div>
               </div>
@@ -218,16 +302,20 @@ export default function PatientDashboard() {
               </div>
             </div>
             <div className="space-y-2">
-              {assistProgress.map((s) => (
-                <div key={s.step} className={`flex items-center gap-3 p-3 rounded-xl border transition-all duration-500 ${
+              {assistProgress.length > 0 ? assistProgress.map((s) => (
+                <div key={s.id || s.step_number} className={`flex items-center gap-3 p-3 rounded-xl border transition-all duration-500 ${
                   s.done ? "bg-success/5 border-success/15" : "bg-secondary/50 border-border"
                 }`}>
                   <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold shrink-0 transition-all ${
                     s.done ? "bg-success text-success-foreground" : "bg-muted text-muted-foreground"
-                  }`}>{s.step}</div>
-                  <span className={`text-sm ${s.done ? "text-foreground" : "text-muted-foreground"}`}>{s.text}</span>
+                  }`}>{s.step_number}</div>
+                  <span className={`text-sm ${s.done ? "text-foreground" : "text-muted-foreground"}`}>{s.instruction_text}</span>
                 </div>
-              ))}
+              )) : (
+                <div className="text-sm text-muted-foreground text-center py-4">
+                  Assist instructions will appear when an emergency is active
+                </div>
+              )}
             </div>
           </GlassCard>
 
@@ -238,20 +326,24 @@ export default function PatientDashboard() {
                 <h3 className="font-semibold text-sm">Emergency Contacts</h3>
               </div>
               <div className="space-y-2">
-                {contacts.map((c) => (
-                  <div key={c.name} className="flex items-center justify-between p-3 rounded-xl bg-secondary/50 border border-border">
+                {emergencyContacts.length > 0 ? emergencyContacts.map((c) => (
+                  <div key={c.id} className="flex items-center justify-between p-3 rounded-xl bg-secondary/50 border border-border">
                     <div className={privacyMode ? "blur-sm select-none" : ""}>
                       <div className="text-sm font-medium">{c.name}</div>
                       <div className="text-xs text-muted-foreground">{c.relation}</div>
                     </div>
                     <div className="flex items-center gap-2">
-                      <StatusBadge severity="success">{c.status}</StatusBadge>
-                      <button className="p-2 rounded-lg bg-primary/10 hover:bg-primary/15">
+                      <StatusBadge severity="success">{c.notified ? "Notified" : "Pending"}</StatusBadge>
+                      <a href={`tel:${c.phone}`} className="p-2 rounded-lg bg-primary/10 hover:bg-primary/15">
                         <Phone className="w-3.5 h-3.5 text-primary" />
-                      </button>
+                      </a>
                     </div>
                   </div>
-                ))}
+                )) : (
+                  <div className="text-sm text-muted-foreground text-center py-4">
+                    No emergency contacts set up yet
+                  </div>
+                )}
               </div>
             </GlassCard>
 
@@ -261,8 +353,8 @@ export default function PatientDashboard() {
                 <h3 className="font-semibold text-sm mb-3">Response Analytics</h3>
                 <MiniAnalytics metrics={[
                   { label: "Detection Time", value: "2.1s", bar: 95, color: "bg-success" },
-                  { label: "Dispatch Time", value: "45s", bar: 80, color: "bg-primary" },
-                  { label: "Corridor Status", value: "Active", bar: 100, color: "bg-success" },
+                  { label: "Dispatch Time", value: activeEmergency?.assigned_at ? `${Math.round((new Date(activeEmergency.assigned_at).getTime() - new Date(activeEmergency.triggered_at).getTime()) / 1000)}s` : "...", bar: 80, color: "bg-primary" },
+                  { label: "Corridor Status", value: status === "corridor" ? "Active" : "Pending", bar: status === "corridor" ? 100 : 30, color: "bg-success" },
                 ]} />
               </GlassCard>
             )}

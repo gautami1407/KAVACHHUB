@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Ambulance, Phone, Navigation, AlertTriangle, CheckCircle, XCircle, Radio, Timer, MapPin } from "lucide-react";
 import { GlassCard } from "@/components/GlassCard";
 import { RoleHeader } from "@/components/RoleHeader";
@@ -10,56 +10,194 @@ import { SeverityIndicator } from "@/components/SeverityIndicator";
 import { MiniAnalytics } from "@/components/MiniAnalytics";
 import { NotificationPanel } from "@/components/NotificationPanel";
 import { NetworkStatus } from "@/components/NetworkStatus";
-
-const signalData = [
-  { id: "S1", location: "Sector 62 Junction", distance: "200m", status: "green" as const },
-  { id: "S2", location: "NH-24 Crossing", distance: "800m", status: "green" as const },
-  { id: "S3", location: "Metro Station", distance: "1.4km", status: "turning" as const },
-  { id: "S4", location: "Ring Road", distance: "2.1km", status: "red" as const },
-  { id: "S5", location: "Hospital Road", distance: "3.0km", status: "red" as const },
-];
+import { useAuth } from "@/hooks/useSupabaseAuth";
+import { useEmergency } from "@/hooks/useEmergency";
+import { useAmbulanceTracking } from "@/hooks/useAmbulanceTracking";
+import { useTrafficSignals } from "@/hooks/useTrafficSignals";
+import { supabase } from "@/lib/supabaseClient";
+import type { Emergency, Patient } from "@/lib/database.types";
 
 export default function AmbulanceDashboard() {
-  const [hasAlert, setHasAlert] = useState(true);
-  const [accepted, setAccepted] = useState(false);
-  const [eta, setEta] = useState(7);
-  const [distance, setDistance] = useState(4.2);
-  const [ambPos, setAmbPos] = useState(5);
-  const [elapsedTime, setElapsedTime] = useState(0);
-  const [signals, setSignals] = useState(signalData);
+  const { user } = useAuth();
+  const {
+    activeEmergency,
+    acceptEmergency,
+    updateEmergencyStatus,
+  } = useEmergency(user?.id);
 
+  const [myAmbulanceId, setMyAmbulanceId] = useState<string | null>(null);
+  const [pendingEmergency, setPendingEmergency] = useState<Emergency | null>(null);
+  const [accepted, setAccepted] = useState(false);
+  const [patientInfo, setPatientInfo] = useState<{ name: string; age: string; blood: string; condition: string; allergies: string; emergencyId: string }>({
+    name: "...", age: "...", blood: "...", condition: "...", allergies: "None", emergencyId: "..."
+  });
+  const [elapsedTime, setElapsedTime] = useState(0);
+  const [hospitalName, setHospitalName] = useState("");
+
+  // Fetch the ambulance assigned to this driver
   useEffect(() => {
-    if (!accepted) return;
-    const i = setInterval(() => {
-      setEta(e => Math.max(1, e - 1));
-      setDistance(d => Math.max(0.3, +(d - 0.5).toFixed(1)));
-      setAmbPos(p => Math.min(95, p + 10));
-      setElapsedTime(t => t + 3);
-      // Progressively turn signals green
-      setSignals(prev => {
-        const next = [...prev];
-        const turningIdx = next.findIndex(s => s.status === "turning");
-        if (turningIdx !== -1 && Math.random() > 0.5) {
-          next[turningIdx] = { ...next[turningIdx], status: "green" };
-          if (turningIdx + 1 < next.length && next[turningIdx + 1].status === "red") {
-            next[turningIdx + 1] = { ...next[turningIdx + 1], status: "turning" };
+    const fetchAmbulance = async () => {
+      if (!user?.id) return;
+      const { data } = await supabase
+        .from("ambulances")
+        .select("id")
+        .eq("driver_id", user.id)
+        .single();
+      if (data) setMyAmbulanceId(data.id);
+    };
+    fetchAmbulance();
+  }, [user?.id]);
+
+  const { ambulancePosition, eta, distance, startTracking, updateETA } = useAmbulanceTracking(
+    myAmbulanceId || undefined,
+    true // isDriver
+  );
+
+  const { signals, corridorSignals, updateCorridorSignalByProximity } = useTrafficSignals();
+
+  // Listen for incoming emergencies assigned to this ambulance
+  useEffect(() => {
+    if (!myAmbulanceId) return;
+
+    const fetchPending = async () => {
+      const { data } = await supabase
+        .from("emergencies")
+        .select("*")
+        .eq("ambulance_id", myAmbulanceId)
+        .in("status", ["triggered", "assigned"])
+        .order("triggered_at", { ascending: false })
+        .limit(1)
+        .single();
+      if (data) setPendingEmergency(data as Emergency);
+    };
+    fetchPending();
+
+    // Also check if already accepted
+    const fetchActive = async () => {
+      const { data } = await supabase
+        .from("emergencies")
+        .select("*")
+        .eq("ambulance_id", myAmbulanceId)
+        .in("status", ["enroute", "corridor"])
+        .order("triggered_at", { ascending: false })
+        .limit(1)
+        .single();
+      if (data) {
+        setPendingEmergency(null);
+        setAccepted(true);
+      }
+    };
+    fetchActive();
+
+    const channel = supabase
+      .channel("ambulance-emergency")
+      .on("postgres_changes", { event: "*", schema: "public", table: "emergencies" }, (payload) => {
+        const e = payload.new as Emergency;
+        if (e.ambulance_id === myAmbulanceId) {
+          if (e.status === "assigned" || e.status === "triggered") {
+            setPendingEmergency(e);
+          } else if (e.status === "enroute" || e.status === "corridor") {
+            setAccepted(true);
+            setPendingEmergency(null);
           }
         }
-        return next;
-      });
-    }, 3000);
+      })
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
+  }, [myAmbulanceId]);
+
+  // Fetch patient info for emergency
+  const currentEmergency = activeEmergency || pendingEmergency;
+  useEffect(() => {
+    const fetchPatient = async () => {
+      if (!currentEmergency?.patient_id) return;
+      const { data: patient } = await supabase
+        .from("patients")
+        .select("*")
+        .eq("id", currentEmergency.patient_id)
+        .single();
+      if (patient) {
+        const { data: profile } = await supabase
+          .from("profiles")
+          .select("full_name")
+          .eq("id", (patient as Patient).user_id)
+          .single();
+        setPatientInfo({
+          name: profile?.full_name || "Unknown",
+          age: patient.date_of_birth ? `${new Date().getFullYear() - new Date(patient.date_of_birth).getFullYear()} years` : "Unknown",
+          blood: patient.blood_group || "Unknown",
+          condition: currentEmergency.emergency_type,
+          allergies: patient.allergies || "None",
+          emergencyId: patient.emergency_id_code,
+        });
+      }
+      if (currentEmergency.hospital_id) {
+        const { data: hosp } = await supabase.from("hospitals").select("name").eq("id", currentEmergency.hospital_id).single();
+        if (hosp) setHospitalName(hosp.name);
+      }
+    };
+    fetchPatient();
+  }, [currentEmergency]);
+
+  // Elapsed time counter
+  useEffect(() => {
+    if (!accepted) return;
+    const i = setInterval(() => setElapsedTime(t => t + 1), 1000);
     return () => clearInterval(i);
   }, [accepted]);
+
+  // Update ETA towards emergency location
+  useEffect(() => {
+    if (accepted && currentEmergency && ambulancePosition) {
+      updateETA(currentEmergency.location_lat, currentEmergency.location_lng);
+    }
+  }, [accepted, currentEmergency, ambulancePosition, updateETA]);
+
+  // Update traffic signals based on ambulance proximity
+  useEffect(() => {
+    if (accepted && ambulancePosition) {
+      updateCorridorSignalByProximity(ambulancePosition.lat, ambulancePosition.lng);
+    }
+  }, [accepted, ambulancePosition, updateCorridorSignalByProximity]);
+
+  const handleAccept = useCallback(async () => {
+    if (!pendingEmergency) return;
+    await acceptEmergency(pendingEmergency.id);
+    setAccepted(true);
+    setPendingEmergency(null);
+    startTracking();
+  }, [pendingEmergency, acceptEmergency, startTracking]);
+
+  const handleReject = useCallback(() => {
+    setPendingEmergency(null);
+  }, []);
+
+  const ambulanceProgress = (() => {
+    if (!ambulancePosition || !currentEmergency) return 5;
+    const dist = distance || 5;
+    return Math.min(95, Math.max(5, (1 - (dist / 10)) * 100));
+  })();
+
+  // Signal data for display
+  const signalDisplay = signals.slice(0, 5).map(s => ({
+    id: s.signal_code,
+    location: s.location,
+    distance: "...",
+    status: s.mode === "corridor" ? "green" as const : s.mode === "emergency" ? "turning" as const : "red" as const,
+  }));
 
   const timelineSteps = [
     { label: "Alert Received", status: "done" as const },
     { label: "Accepted", status: accepted ? "done" as const : "active" as const },
     { label: "En Route", status: accepted ? "active" as const : "pending" as const },
-    { label: "Corridor Active", status: accepted && ambPos > 30 ? "active" as const : "pending" as const },
+    { label: "Corridor Active", status: accepted && ambulanceProgress > 30 ? "active" as const : "pending" as const },
     { label: "Delivered", status: "pending" as const },
   ];
 
   const formatTime = (s: number) => `${Math.floor(s / 60)}:${(s % 60).toString().padStart(2, "0")}`;
+
+  const hasAlert = !!pendingEmergency;
 
   return (
     <div className="min-h-screen bg-background">
@@ -82,20 +220,19 @@ export default function AmbulanceDashboard() {
                 <div className="flex items-center gap-2 mb-2">
                   <h3 className="font-bold text-lg">Incoming Emergency</h3>
                 </div>
-                <SeverityIndicator level="critical" className="mb-3" />
+                <SeverityIndicator level={pendingEmergency?.severity === "critical" ? "critical" : pendingEmergency?.severity === "moderate" ? "moderate" : "stable"} className="mb-3" />
                 <div className="space-y-1.5 text-sm text-muted-foreground">
-                  <p className="flex items-center gap-2"><MapPin className="w-3.5 h-3.5" /> Sector 62, Noida</p>
-                  <p>🫀 Cardiac Emergency</p>
-                  <p>👤 Male, 45 yrs · Blood: O+</p>
-                  <p>📏 Distance: 4.2 km</p>
+                  <p className="flex items-center gap-2"><MapPin className="w-3.5 h-3.5" /> {pendingEmergency?.location_text || "Location pending"}</p>
+                  <p>🫀 {pendingEmergency?.emergency_type || "Emergency"}</p>
+                  <p>👤 {patientInfo.name} · Blood: {patientInfo.blood}</p>
                 </div>
               </div>
             </div>
             <div className="flex gap-3">
-              <button onClick={() => setAccepted(true)} className="flex-1 py-3.5 rounded-xl bg-success text-success-foreground font-semibold text-sm flex items-center justify-center gap-2 hover:brightness-105 transition-all active:scale-[0.98] shadow-lg">
+              <button onClick={handleAccept} className="flex-1 py-3.5 rounded-xl bg-success text-success-foreground font-semibold text-sm flex items-center justify-center gap-2 hover:brightness-105 transition-all active:scale-[0.98] shadow-lg">
                 <CheckCircle className="w-5 h-5" /> Accept Mission
               </button>
-              <button onClick={() => setHasAlert(false)} className="flex-1 py-3.5 rounded-xl bg-secondary border border-border text-muted-foreground font-semibold text-sm flex items-center justify-center gap-2 hover:bg-accent transition-all">
+              <button onClick={handleReject} className="flex-1 py-3.5 rounded-xl bg-secondary border border-border text-muted-foreground font-semibold text-sm flex items-center justify-center gap-2 hover:bg-accent transition-all">
                 <XCircle className="w-5 h-5" /> Reject
               </button>
             </div>
@@ -116,12 +253,12 @@ export default function AmbulanceDashboard() {
             <div className="grid grid-cols-4 gap-3">
               <GlassCard className="!p-4 text-center" hover>
                 <Timer className="w-4 h-4 text-primary mx-auto mb-1" />
-                <div className="text-2xl font-black animate-count-pulse">{eta}</div>
+                <div className="text-2xl font-black animate-count-pulse">{eta || '...'}</div>
                 <div className="text-[10px] text-muted-foreground uppercase">ETA min</div>
               </GlassCard>
               <GlassCard className="!p-4 text-center" hover>
                 <Navigation className="w-4 h-4 text-primary mx-auto mb-1" />
-                <div className="text-2xl font-black">{distance}</div>
+                <div className="text-2xl font-black">{distance?.toFixed(1) || '...'}</div>
                 <div className="text-[10px] text-muted-foreground uppercase">km left</div>
               </GlassCard>
               <GlassCard className="!p-4 text-center" hover>
@@ -130,13 +267,18 @@ export default function AmbulanceDashboard() {
                 <div className="text-[10px] text-muted-foreground uppercase">elapsed</div>
               </GlassCard>
               <GlassCard className="!p-4 text-center" hover>
-                <div className="text-2xl font-black text-success">{signals.filter(s => s.status === "green").length}</div>
+                <div className="text-2xl font-black text-success">{signals.filter(s => s.mode === "corridor").length}</div>
                 <div className="text-[10px] text-muted-foreground uppercase">green signals</div>
               </GlassCard>
             </div>
 
             {/* Navigation Map */}
-            <LiveMap className="h-64 md:h-80" showRoute ambulanceProgress={ambPos} />
+            <LiveMap
+              className="h-64 md:h-80"
+              showRoute
+              ambulanceProgress={ambulanceProgress}
+              startCoords={currentEmergency ? [currentEmergency.location_lat, currentEmergency.location_lng] : undefined}
+            />
 
             {/* Traffic Signal Strip */}
             <GlassCard>
@@ -146,7 +288,7 @@ export default function AmbulanceDashboard() {
                 <StatusBadge severity="success">Green Corridor</StatusBadge>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-5 gap-3">
-                {signals.map((s) => (
+                {signalDisplay.map((s) => (
                   <div key={s.id} className={`flex items-center gap-3 p-3 rounded-xl border transition-all duration-500 ${
                     s.status === "green" ? "bg-success/5 border-success/20" :
                     s.status === "turning" ? "bg-warning/5 border-warning/20" :
@@ -174,12 +316,12 @@ export default function AmbulanceDashboard() {
                   <h3 className="font-semibold text-sm">Patient Info</h3>
                 </div>
                 <div className="space-y-2 text-sm">
-                  <Row label="Name" value="Amit Verma" />
-                  <Row label="Age" value="45 years" />
-                  <Row label="Blood Group" value="O+" />
-                  <Row label="Condition" value="Cardiac Arrest" />
-                  <Row label="Allergies" value="Penicillin" />
-                  <Row label="Emergency ID" value="JS-2024-8847" />
+                  <Row label="Name" value={patientInfo.name} />
+                  <Row label="Age" value={patientInfo.age} />
+                  <Row label="Blood Group" value={patientInfo.blood} />
+                  <Row label="Condition" value={patientInfo.condition} />
+                  <Row label="Allergies" value={patientInfo.allergies} />
+                  <Row label="Emergency ID" value={patientInfo.emergencyId} />
                 </div>
               </GlassCard>
 
@@ -202,9 +344,9 @@ export default function AmbulanceDashboard() {
               <GlassCard>
                 <h3 className="font-semibold text-sm mb-3">Trip Analytics</h3>
                 <MiniAnalytics metrics={[
-                  { label: "Distance Covered", value: `${(4.2 - distance).toFixed(1)} km`, bar: ((4.2 - distance) / 4.2) * 100, color: "bg-primary" },
-                  { label: "Signals Overridden", value: `${signals.filter(s => s.status === "green").length}`, bar: (signals.filter(s => s.status === "green").length / signals.length) * 100, color: "bg-success" },
-                  { label: "Avg Speed", value: "48 km/h", bar: 65, color: "bg-warning" },
+                  { label: "Distance Covered", value: `${distance ? (10 - distance).toFixed(1) : '0'} km`, bar: distance ? ((10 - distance) / 10) * 100 : 0, color: "bg-primary" },
+                  { label: "Signals Overridden", value: `${signals.filter(s => s.mode === "corridor").length}`, bar: (signals.filter(s => s.mode === "corridor").length / Math.max(signals.length, 1)) * 100, color: "bg-success" },
+                  { label: "Avg Speed", value: ambulancePosition?.speed ? `${Math.round(ambulancePosition.speed)} km/h` : "-- km/h", bar: ambulancePosition?.speed ? Math.min(100, (ambulancePosition.speed / 80) * 100) : 0, color: "bg-warning" },
                   { label: "Corridor Status", value: "Active", bar: 100, color: "bg-success" },
                 ]} />
               </GlassCard>

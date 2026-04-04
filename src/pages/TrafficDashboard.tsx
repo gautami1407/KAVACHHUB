@@ -8,39 +8,43 @@ import { MiniAnalytics } from "@/components/MiniAnalytics";
 import { LiveMap } from "@/components/LiveMap";
 import { NotificationPanel } from "@/components/NotificationPanel";
 import { NetworkStatus } from "@/components/NetworkStatus";
-
-interface Signal {
-  id: string;
-  location: string;
-  mode: "normal" | "emergency" | "corridor";
-}
-
-const initialSignals: Signal[] = [
-  { id: "TL-01", location: "Sector 62 Junction", mode: "corridor" },
-  { id: "TL-02", location: "NH-24 Crossing", mode: "corridor" },
-  { id: "TL-03", location: "Metro Station Signal", mode: "emergency" },
-  { id: "TL-04", location: "City Center", mode: "normal" },
-  { id: "TL-05", location: "Hospital Road", mode: "corridor" },
-  { id: "TL-06", location: "Ring Road East", mode: "normal" },
-  { id: "TL-07", location: "Railway Crossing", mode: "normal" },
-  { id: "TL-08", location: "Industrial Area", mode: "normal" },
-];
+import { useTrafficSignals } from "@/hooks/useTrafficSignals";
+import { useAmbulanceTracking } from "@/hooks/useAmbulanceTracking";
+import { useSystemStats } from "@/hooks/useSystemStats";
 
 export default function TrafficDashboard() {
-  const [signals, setSignals] = useState(initialSignals);
-  const [ambulanceSignal, setAmbulanceSignal] = useState(0);
-  const [ambMapPos, setAmbMapPos] = useState(10);
+  const { signals, corridorCount, emergencyCount, activeCorridors, loading, manualOverride } = useTrafficSignals();
+  const { allAmbulances } = useAmbulanceTracking();
+  const { stats } = useSystemStats();
 
+  const [ambulanceSignalIdx, setAmbulanceSignalIdx] = useState(0);
+
+  // Ambulance with enroute or dispatched status for map tracking
+  const activeAmbulance = allAmbulances.find(a => a.status === "enroute" || a.status === "dispatched");
+
+  const ambMapPos = (() => {
+    if (!activeAmbulance || !activeAmbulance.lat) return 10;
+    return Math.min(90, 50); // Will be dynamic with real position
+  })();
+
+  // Cycle through signals for corridor animation
   useEffect(() => {
     const i = setInterval(() => {
-      setAmbulanceSignal(p => (p + 1) % signals.length);
-      setAmbMapPos(p => Math.min(90, p + 8));
+      setAmbulanceSignalIdx(p => (p + 1) % Math.max(signals.length, 1));
     }, 3000);
     return () => clearInterval(i);
   }, [signals.length]);
 
-  const corridorCount = signals.filter(s => s.mode === "corridor").length;
-  const emergencyCount = signals.filter(s => s.mode === "emergency").length;
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <div className="text-center">
+          <TrafficCone className="w-12 h-12 text-primary/20 mx-auto mb-3 animate-pulse" />
+          <p className="text-sm text-muted-foreground">Loading traffic data...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-background">
@@ -67,7 +71,7 @@ export default function TrafficDashboard() {
             <div className="text-xs text-muted-foreground mt-1">Total Signals</div>
           </GlassCard>
           <GlassCard className="!p-4 text-center" hover>
-            <div className="text-2xl font-black text-primary">14</div>
+            <div className="text-2xl font-black text-primary">{stats.signals_overridden_today || "0"}</div>
             <div className="text-xs text-muted-foreground mt-1">Signals Overridden</div>
           </GlassCard>
         </div>
@@ -77,7 +81,9 @@ export default function TrafficDashboard() {
           <div className="px-5 pt-5 pb-3 flex items-center gap-2">
             <Zap className="w-4 h-4 text-success" />
             <h3 className="font-semibold text-sm">Live 3D Green Corridor</h3>
-            <StatusBadge severity="success">Active</StatusBadge>
+            <StatusBadge severity={activeCorridors.length > 0 ? "success" : "info"}>
+              {activeCorridors.length > 0 ? "Active" : "Standby"}
+            </StatusBadge>
           </div>
           <GreenCorridorScene className="h-[300px] md:h-[420px] w-full" />
           <div className="px-5 py-3 border-t border-border flex items-center gap-4 text-xs text-muted-foreground">
@@ -93,8 +99,16 @@ export default function TrafficDashboard() {
           <div className="px-5 pt-5 pb-3 flex items-center gap-2">
             <MapPin className="w-4 h-4 text-primary" />
             <h3 className="font-semibold text-sm">Live Ambulance Tracking</h3>
+            {activeAmbulance && (
+              <StatusBadge severity="success">Unit {activeAmbulance.unit_code}</StatusBadge>
+            )}
           </div>
-          <LiveMap className="h-[250px] md:h-[300px]" showRoute ambulanceProgress={ambMapPos} />
+          <LiveMap
+            className="h-[250px] md:h-[300px]"
+            showRoute={!!activeAmbulance}
+            ambulanceProgress={ambMapPos}
+            startCoords={activeAmbulance?.lat && activeAmbulance?.lng ? [activeAmbulance.lat, activeAmbulance.lng] : undefined}
+          />
         </GlassCard>
 
         {/* Corridor Animation strip */}
@@ -110,16 +124,16 @@ export default function TrafficDashboard() {
               {signals.slice(0, 5).map((s, i) => (
                 <div key={s.id} className="flex flex-col items-center gap-2 z-10">
                   <div className={`w-8 h-8 rounded-full border-2 flex items-center justify-center transition-all duration-500 ${
-                    i <= ambulanceSignal
+                    s.mode === "corridor"
                       ? "bg-success border-success text-success-foreground scale-110"
-                      : i === ambulanceSignal + 1
+                      : s.mode === "emergency"
                       ? "bg-warning/20 border-warning text-warning animate-signal-blink"
                       : "bg-secondary border-border text-muted-foreground"
                   }`}>
                     <div className="w-2 h-2 rounded-full bg-current" />
                   </div>
-                  <span className="text-[10px] text-muted-foreground text-center hidden sm:block">{s.id}</span>
-                  {i === ambulanceSignal && (
+                  <span className="text-[10px] text-muted-foreground text-center hidden sm:block">{s.signal_code}</span>
+                  {i === ambulanceSignalIdx && activeCorridors.length > 0 && (
                     <div className="absolute -top-6 text-xs text-destructive font-bold animate-count-pulse">🚑</div>
                   )}
                 </div>
@@ -144,7 +158,7 @@ export default function TrafficDashboard() {
                     "bg-secondary/50 border-border"
                   }`} style={{ animationDelay: `${i * 0.05}s` }}>
                     <div className="flex items-center justify-between mb-2">
-                      <span className="font-mono text-sm font-bold">{s.id}</span>
+                      <span className="font-mono text-sm font-bold">{s.signal_code}</span>
                       <div className={`w-3 h-3 rounded-full ${
                         s.mode === "corridor" ? "bg-success" :
                         s.mode === "emergency" ? "bg-warning animate-signal-blink" :
@@ -154,9 +168,19 @@ export default function TrafficDashboard() {
                     <div className="flex items-center gap-1 text-xs text-muted-foreground mb-2">
                       <MapPin className="w-3 h-3" /> {s.location}
                     </div>
-                    <StatusBadge severity={s.mode === "corridor" ? "success" : s.mode === "emergency" ? "warning" : "info"}>
-                      {s.mode === "corridor" ? "Green Corridor" : s.mode === "emergency" ? "Emergency" : "Normal"}
-                    </StatusBadge>
+                    <div className="flex items-center justify-between">
+                      <StatusBadge severity={s.mode === "corridor" ? "success" : s.mode === "emergency" ? "warning" : "info"}>
+                        {s.mode === "corridor" ? "Green Corridor" : s.mode === "emergency" ? "Emergency" : "Normal"}
+                      </StatusBadge>
+                      {s.mode !== "corridor" && (
+                        <button
+                          onClick={() => manualOverride(s.id, "corridor")}
+                          className="text-[10px] text-primary hover:underline"
+                        >
+                          Override
+                        </button>
+                      )}
+                    </div>
                   </div>
                 ))}
               </div>
@@ -167,11 +191,11 @@ export default function TrafficDashboard() {
           <GlassCard>
             <h3 className="font-semibold text-sm mb-4">System Analytics</h3>
             <MiniAnalytics metrics={[
-              { label: "Signals Overridden", value: "14", bar: 70, color: "bg-success" },
-              { label: "Corridors Today", value: "6", bar: 60, color: "bg-primary" },
+              { label: "Signals Overridden", value: stats.signals_overridden_today || "0", bar: 70, color: "bg-success" },
+              { label: "Corridors Today", value: stats.total_corridors_today || "0", bar: 60, color: "bg-primary" },
               { label: "Avg Clear Time", value: "12s", bar: 40, color: "bg-warning" },
-              { label: "System Uptime", value: "99.9%", bar: 99, color: "bg-success" },
-              { label: "Active Ambulances", value: "3", bar: 30, color: "bg-destructive" },
+              { label: "System Uptime", value: stats.system_uptime || "99.9%", bar: 99, color: "bg-success" },
+              { label: "Active Ambulances", value: allAmbulances.filter(a => a.status !== "offline" && a.status !== "available").length.toString(), bar: 30, color: "bg-destructive" },
             ]} />
           </GlassCard>
         </div>

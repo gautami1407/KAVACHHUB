@@ -1,7 +1,9 @@
 import { Link } from "react-router-dom";
-import { Heart, Ambulance, Hospital, TrafficCone, Shield, ArrowRight, Zap, Activity, Clock, CheckCircle } from "lucide-react";
+import { Heart, Ambulance, Hospital, TrafficCone, Shield, ArrowRight, Zap, Activity, Clock, CheckCircle, LogIn } from "lucide-react";
 import { GreenCorridorScene } from "@/components/GreenCorridorScene";
 import { NetworkStatus } from "@/components/NetworkStatus";
+import { useAuth } from "@/hooks/useSupabaseAuth";
+import { useSystemStats } from "@/hooks/useSystemStats";
 
 const roles = [
   {
@@ -38,13 +40,16 @@ const roles = [
   },
 ];
 
-const stats = [
-  { label: "Avg Response", value: "4.2 min", icon: Clock },
-  { label: "Lives Saved", value: "12,847", icon: CheckCircle },
-  { label: "Active Units", value: "342", icon: Activity },
-];
-
 export default function Index() {
+  const { user, profile, signOut } = useAuth();
+  const { stats } = useSystemStats();
+
+  const displayStats = [
+    { label: "Avg Response", value: stats.avg_response_time || "4.2 min", icon: Clock },
+    { label: "Lives Saved", value: stats.lives_saved || "0", icon: CheckCircle },
+    { label: "Active Units", value: stats.active_units || "0", icon: Activity },
+  ];
+
   return (
     <div className="min-h-screen bg-background flex flex-col">
       {/* Header */}
@@ -61,6 +66,24 @@ export default function Index() {
           </div>
           <div className="flex items-center gap-2">
             <NetworkStatus />
+            {user ? (
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-muted-foreground hidden sm:block">{profile?.full_name}</span>
+                <button
+                  onClick={signOut}
+                  className="px-3 py-1.5 rounded-full bg-secondary border border-border text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  Sign Out
+                </button>
+              </div>
+            ) : (
+              <Link
+                to="/login"
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-primary/10 border border-primary/20 text-xs text-primary font-medium hover:bg-primary/15 transition-colors"
+              >
+                <LogIn className="w-3 h-3" /> Sign In
+              </Link>
+            )}
             <div className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-success/10 border border-success/20 text-xs text-success font-medium">
               <span className="w-1.5 h-1.5 rounded-full bg-success animate-pulse" />
               System Online
@@ -88,7 +111,7 @@ export default function Index() {
 
           {/* Stats strip */}
           <div className="flex justify-center gap-6 md:gap-10 mb-10 animate-fade-in-up" style={{ animationDelay: "0.25s" }}>
-            {stats.map(s => (
+            {displayStats.map(s => (
               <div key={s.label} className="text-center">
                 <s.icon className="w-5 h-5 text-primary mx-auto mb-1" />
                 <div className="text-xl md:text-2xl font-black">{s.value}</div>
@@ -116,6 +139,17 @@ export default function Index() {
                 <p className="text-sm text-muted-foreground leading-relaxed">{role.description}</p>
               </Link>
             ))}
+          </div>
+
+          {/* QR Scan Link */}
+          <div className="text-center mb-8 animate-fade-in-up" style={{ animationDelay: "0.55s" }}>
+            <Link
+              to="/scan"
+              className="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-primary/10 border border-primary/20 text-primary text-sm font-semibold hover:bg-primary/15 transition-all"
+            >
+              🔍 Scan SafeRide QR Code
+              <ArrowRight className="w-4 h-4" />
+            </Link>
           </div>
 
           {/* 3D Corridor Section */}
