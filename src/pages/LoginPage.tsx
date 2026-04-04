@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useAuth } from '@/hooks/useSupabaseAuth';
+import { supabase } from '@/lib/supabaseClient';
 import { useNavigate } from 'react-router-dom';
 import { Shield, Heart, Ambulance, Hospital, TrafficCone, LogIn, UserPlus, ArrowRight, Eye, EyeOff } from 'lucide-react';
 import type { Role } from '@/lib/database.types';
@@ -38,17 +39,36 @@ export default function LoginPage() {
     if (mode === 'login') {
       const { error: err } = await signIn(email, password);
       if (err) { setError(err); setLoading(false); return; }
+
+      // Fetch the actual profile role from DB to navigate correctly
+      const { data: { user: authUser } } = await supabase.auth.getUser();
+      if (authUser) {
+        const { data: profileData } = await supabase
+          .from('profiles')
+          .select('role')
+          .eq('id', authUser.id)
+          .single();
+        const pd = profileData as { role: string } | null;
+        if (pd?.role) {
+          navigate(roleRoutes[pd.role as Role]);
+          setLoading(false);
+          return;
+        }
+      }
+      // Fallback to form role if profile fetch fails
+      navigate(roleRoutes[role]);
+      setLoading(false);
     } else {
       if (!fullName.trim()) { setError('Full name is required'); setLoading(false); return; }
       const { error: err } = await signUp(email, password, fullName, role);
       if (err) { setError(err); setLoading(false); return; }
-    }
 
-    // Navigate based on role — will be resolved after auth state updates
-    setTimeout(() => {
-      navigate(roleRoutes[role]);
-      setLoading(false);
-    }, 500);
+      // For signup, navigate based on selected role (since we just created the profile with it)
+      setTimeout(() => {
+        navigate(roleRoutes[role]);
+        setLoading(false);
+      }, 500);
+    }
   };
 
   return (

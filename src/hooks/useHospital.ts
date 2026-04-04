@@ -2,11 +2,38 @@ import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '@/lib/supabaseClient';
 import type { Hospital, Doctor, Emergency } from '@/lib/database.types';
 
+// Haversine distance in km
+function haversineKm(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const R = 6371;
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLng = ((lng2 - lng1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos((lat1 * Math.PI) / 180) *
+    Math.cos((lat2 * Math.PI) / 180) *
+    Math.sin(dLng / 2) * Math.sin(dLng / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
+// Extended emergency type with patient and ambulance details
+export interface IncomingPatient extends Emergency {
+  patientName?: string;
+  bloodGroup?: string;
+  allergies?: string;
+  medicalConditions?: string;
+  ambulanceUnit?: string;
+  ambulanceLat?: number;
+  ambulanceLng?: number;
+  etaMinutes?: number;
+  distanceKm?: number;
+}
+
 export function useHospital(hospitalId?: string) {
   const [hospital, setHospital] = useState<Hospital | null>(null);
   const [hospitals, setHospitals] = useState<Hospital[]>([]);
   const [doctors, setDoctors] = useState<Doctor[]>([]);
-  const [incomingPatients, setIncomingPatients] = useState<Emergency[]>([]);
+  const [incomingPatients, setIncomingPatients] = useState<IncomingPatient[]>([]);
   const [loading, setLoading] = useState(true);
 
   // Fetch all hospitals
@@ -29,16 +56,84 @@ export function useHospital(hospitalId?: string) {
     setDoctors((data as Doctor[]) || []);
   }, []);
 
-  // Fetch incoming patients (emergencies assigned to this hospital)
+  // Fetch incoming patients with full joined details
   const fetchIncomingPatients = useCallback(async (hId: string) => {
-    const { data } = await supabase
+    const { data: emergencies } = await supabase
       .from('emergencies')
       .select('*')
       .eq('hospital_id', hId)
       .not('status', 'eq', 'completed')
       .order('triggered_at', { ascending: false });
-    setIncomingPatients((data as Emergency[]) || []);
-  }, []);
+
+    if (!emergencies || emergencies.length === 0) {
+      setIncomingPatients([]);
+      return;
+    }
+
+    // For each emergency, fetch patient and ambulance details
+    const enriched: IncomingPatient[] = await Promise.all(
+      emergencies.map(async (e) => {
+        const base: IncomingPatient = { ...e };
+
+        // Fetch patient details
+        if (e.patient_id) {
+          const { data: patient } = await supabase
+            .from('patients')
+            .select('blood_group, allergies, medical_conditions, user_id')
+            .eq('id', e.patient_id)
+            .single();
+
+          if (patient) {
+            base.bloodGroup = patient.blood_group || 'Unknown';
+            base.allergies = patient.allergies || 'None';
+            base.medicalConditions = patient.medical_conditions || 'None';
+
+            // Fetch profile name
+            const { data: profile } = await supabase
+              .from('profiles')
+              .select('full_name')
+              .eq('id', patient.user_id)
+              .single();
+            base.patientName = profile?.full_name || 'Unknown';
+          }
+        }
+
+        // Fetch ambulance details and compute ETA
+        if (e.ambulance_id) {
+          const { data: amb } = await supabase
+            .from('ambulances')
+            .select('unit_code, lat, lng, current_speed')
+            .eq('id', e.ambulance_id)
+            .single();
+
+          if (amb) {
+            base.ambulanceUnit = amb.unit_code;
+            base.ambulanceLat = amb.lat;
+            base.ambulanceLng = amb.lng;
+
+            // Compute distance and ETA from ambulance to hospital
+            if (amb.lat && amb.lng && hospitalId) {
+              const { data: hosp } = await supabase
+                .from('hospitals')
+                .select('lat, lng')
+                .eq('id', hId)
+                .single();
+              if (hosp) {
+                const dist = haversineKm(amb.lat, amb.lng, hosp.lat, hosp.lng);
+                base.distanceKm = Math.round(dist * 10) / 10;
+                const speed = amb.current_speed && amb.current_speed > 0 ? amb.current_speed : 40;
+                base.etaMinutes = Math.ceil((dist / speed) * 60);
+              }
+            }
+          }
+        }
+
+        return base;
+      })
+    );
+
+    setIncomingPatients(enriched);
+  }, [hospitalId]);
 
   useEffect(() => {
     fetchHospitals();
@@ -48,7 +143,7 @@ export function useHospital(hospitalId?: string) {
     }
   }, [hospitalId, fetchHospitals, fetchDoctors, fetchIncomingPatients]);
 
-  // Realtime for hospital updates
+  // Realtime for hospital updates — refresh every time any related table changes
   useEffect(() => {
     const channel = supabase
       .channel('hospital-realtime')
@@ -59,6 +154,10 @@ export function useHospital(hospitalId?: string) {
         if (hospitalId) fetchDoctors(hospitalId);
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'emergencies' }, () => {
+        if (hospitalId) fetchIncomingPatients(hospitalId);
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'ambulances' }, () => {
+        // Re-fetch to get updated ambulance positions and ETAs
         if (hospitalId) fetchIncomingPatients(hospitalId);
       })
       .subscribe();
@@ -112,5 +211,6 @@ export function useHospital(hospitalId?: string) {
     toggleDoctorStatus,
     getAnalytics,
     fetchHospitals,
+    fetchIncomingPatients,
   };
 }

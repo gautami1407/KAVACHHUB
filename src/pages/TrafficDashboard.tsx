@@ -108,6 +108,8 @@ export default function TrafficDashboard() {
             showRoute={!!activeAmbulance}
             ambulanceProgress={ambMapPos}
             startCoords={activeAmbulance?.lat && activeAmbulance?.lng ? [activeAmbulance.lat, activeAmbulance.lng] : undefined}
+            ambulanceLatLng={activeAmbulance?.lat && activeAmbulance?.lng ? [activeAmbulance.lat, activeAmbulance.lng] : undefined}
+            signalMarkers={signals.map(s => ({ lat: s.lat, lng: s.lng, mode: s.mode, code: s.signal_code }))}
           />
         </GlassCard>
 

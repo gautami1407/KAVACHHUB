@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback } from "react";
-import { Ambulance, Phone, Navigation, AlertTriangle, CheckCircle, XCircle, Radio, Timer, MapPin } from "lucide-react";
+import { useState, useEffect, useCallback, useRef } from "react";
+import { Ambulance, Phone, Navigation, AlertTriangle, CheckCircle, XCircle, Radio, Timer, MapPin, Flag } from "lucide-react";
 import { GlassCard } from "@/components/GlassCard";
 import { RoleHeader } from "@/components/RoleHeader";
 import { StatusBadge } from "@/components/StatusBadge";
@@ -22,6 +22,8 @@ export default function AmbulanceDashboard() {
   const {
     activeEmergency,
     acceptEmergency,
+    activateCorridorStatus,
+    checkAndMarkArrived,
     updateEmergencyStatus,
   } = useEmergency(user?.id);
 
@@ -33,6 +35,11 @@ export default function AmbulanceDashboard() {
   });
   const [elapsedTime, setElapsedTime] = useState(0);
   const [hospitalName, setHospitalName] = useState("");
+  const [hospitalCoords, setHospitalCoords] = useState<[number, number] | null>(null);
+
+  // Track if we've already triggered corridor status transition
+  const corridorActivated = useRef(false);
+  const arrivalChecked = useRef(false);
 
   // Fetch the ambulance assigned to this driver
   useEffect(() => {
@@ -48,12 +55,12 @@ export default function AmbulanceDashboard() {
     fetchAmbulance();
   }, [user?.id]);
 
-  const { ambulancePosition, eta, distance, startTracking, updateETA } = useAmbulanceTracking(
+  const { ambulancePosition, eta, distance, startTracking, stopTracking, updateETA, calculateDistance } = useAmbulanceTracking(
     myAmbulanceId || undefined,
     true // isDriver
   );
 
-  const { signals, corridorSignals, updateCorridorSignalByProximity } = useTrafficSignals();
+  const { signals, corridorSignals, hasGreenSignals, updateCorridorSignalByProximity } = useTrafficSignals();
 
   // Listen for incoming emergencies assigned to this ambulance
   useEffect(() => {
@@ -78,13 +85,19 @@ export default function AmbulanceDashboard() {
         .from("emergencies")
         .select("*")
         .eq("ambulance_id", myAmbulanceId)
-        .in("status", ["enroute", "corridor"])
+        .in("status", ["enroute", "corridor", "arrived"])
         .order("triggered_at", { ascending: false })
         .limit(1)
         .single();
       if (data) {
         setPendingEmergency(null);
         setAccepted(true);
+        if (data.status === 'corridor' || data.status === 'arrived') {
+          corridorActivated.current = true;
+        }
+        if (data.status === 'arrived') {
+          arrivalChecked.current = true;
+        }
       }
     };
     fetchActive();
@@ -96,16 +109,24 @@ export default function AmbulanceDashboard() {
         if (e.ambulance_id === myAmbulanceId) {
           if (e.status === "assigned" || e.status === "triggered") {
             setPendingEmergency(e);
-          } else if (e.status === "enroute" || e.status === "corridor") {
+          } else if (e.status === "enroute" || e.status === "corridor" || e.status === "arrived") {
             setAccepted(true);
             setPendingEmergency(null);
+          } else if (e.status === "completed") {
+            // Emergency completed — reset dashboard
+            setAccepted(false);
+            setPendingEmergency(null);
+            corridorActivated.current = false;
+            arrivalChecked.current = false;
+            setElapsedTime(0);
+            stopTracking();
           }
         }
       })
       .subscribe();
 
     return () => { supabase.removeChannel(channel); };
-  }, [myAmbulanceId]);
+  }, [myAmbulanceId, stopTracking]);
 
   // Fetch patient info for emergency
   const currentEmergency = activeEmergency || pendingEmergency;
@@ -133,8 +154,11 @@ export default function AmbulanceDashboard() {
         });
       }
       if (currentEmergency.hospital_id) {
-        const { data: hosp } = await supabase.from("hospitals").select("name").eq("id", currentEmergency.hospital_id).single();
-        if (hosp) setHospitalName(hosp.name);
+        const { data: hosp } = await supabase.from("hospitals").select("name, lat, lng").eq("id", currentEmergency.hospital_id).single();
+        if (hosp) {
+          setHospitalName(hosp.name);
+          setHospitalCoords([hosp.lat, hosp.lng]);
+        }
       }
     };
     fetchPatient();
@@ -154,12 +178,50 @@ export default function AmbulanceDashboard() {
     }
   }, [accepted, currentEmergency, ambulancePosition, updateETA]);
 
-  // Update traffic signals based on ambulance proximity
+  // ──── CORE: Update traffic signals based on ambulance proximity ────
   useEffect(() => {
     if (accepted && ambulancePosition) {
       updateCorridorSignalByProximity(ambulancePosition.lat, ambulancePosition.lng);
     }
   }, [accepted, ambulancePosition, updateCorridorSignalByProximity]);
+
+  // ──── CORE: Auto-transition enroute → corridor when first signal turns green ────
+  useEffect(() => {
+    if (
+      !corridorActivated.current &&
+      accepted &&
+      hasGreenSignals &&
+      currentEmergency &&
+      (currentEmergency.status === 'enroute')
+    ) {
+      corridorActivated.current = true;
+      activateCorridorStatus(currentEmergency.id);
+    }
+  }, [accepted, hasGreenSignals, currentEmergency, activateCorridorStatus]);
+
+  // ──── CORE: Auto-detect arrival at emergency scene ────
+  useEffect(() => {
+    if (
+      !arrivalChecked.current &&
+      accepted &&
+      ambulancePosition &&
+      currentEmergency &&
+      (currentEmergency.status === 'enroute' || currentEmergency.status === 'corridor')
+    ) {
+      checkAndMarkArrived(
+        currentEmergency.id,
+        ambulancePosition.lat,
+        ambulancePosition.lng,
+        currentEmergency.location_lat,
+        currentEmergency.location_lng,
+        0.3 // 300 meters threshold
+      ).then(result => {
+        if (result) {
+          arrivalChecked.current = true;
+        }
+      });
+    }
+  }, [accepted, ambulancePosition, currentEmergency, checkAndMarkArrived]);
 
   const handleAccept = useCallback(async () => {
     if (!pendingEmergency) return;
@@ -173,26 +235,42 @@ export default function AmbulanceDashboard() {
     setPendingEmergency(null);
   }, []);
 
+  const handleComplete = useCallback(async () => {
+    if (!currentEmergency) return;
+    await updateEmergencyStatus(currentEmergency.id, 'completed');
+    setAccepted(false);
+    corridorActivated.current = false;
+    arrivalChecked.current = false;
+    setElapsedTime(0);
+    stopTracking();
+  }, [currentEmergency, updateEmergencyStatus, stopTracking]);
+
   const ambulanceProgress = (() => {
     if (!ambulancePosition || !currentEmergency) return 5;
     const dist = distance || 5;
     return Math.min(95, Math.max(5, (1 - (dist / 10)) * 100));
   })();
 
+  // Get actual status from the emergency record (not local state)
+  const status = currentEmergency?.status || (accepted ? 'enroute' : 'idle');
+
   // Signal data for display
-  const signalDisplay = signals.slice(0, 5).map(s => ({
+  const signalDisplay = signals.slice(0, 8).map(s => ({
     id: s.signal_code,
     location: s.location,
-    distance: "...",
+    distance: ambulancePosition
+      ? `${calculateDistance(ambulancePosition.lat, ambulancePosition.lng, s.lat, s.lng).toFixed(1)} km`
+      : "...",
     status: s.mode === "corridor" ? "green" as const : s.mode === "emergency" ? "turning" as const : "red" as const,
   }));
 
   const timelineSteps = [
     { label: "Alert Received", status: "done" as const },
     { label: "Accepted", status: accepted ? "done" as const : "active" as const },
-    { label: "En Route", status: accepted ? "active" as const : "pending" as const },
-    { label: "Corridor Active", status: accepted && ambulanceProgress > 30 ? "active" as const : "pending" as const },
-    { label: "Delivered", status: "pending" as const },
+    { label: "En Route", status: (status === "enroute" || status === "corridor" || status === "arrived") ? "done" as const : accepted ? "active" as const : "pending" as const },
+    { label: "Corridor Active", status: (status === "corridor" || status === "arrived") ? "done" as const : status === "enroute" ? "active" as const : "pending" as const },
+    { label: "Arrived", status: status === "arrived" ? "done" as const : status === "corridor" ? "active" as const : "pending" as const },
+    { label: "Delivered", status: status === "completed" ? "done" as const : status === "arrived" ? "active" as const : "pending" as const },
   ];
 
   const formatTime = (s: number) => `${Math.floor(s / 60)}:${(s % 60).toString().padStart(2, "0")}`;
@@ -272,12 +350,29 @@ export default function AmbulanceDashboard() {
               </GlassCard>
             </div>
 
+            {/* Status indicator for corridor */}
+            {status === 'corridor' && (
+              <div className="p-3 rounded-xl bg-success/10 border border-success/20 text-success text-sm font-medium flex items-center gap-2 animate-fade-in-up">
+                <span className="w-2 h-2 rounded-full bg-success animate-pulse" />
+                🟢 Green Corridor Active — Signals are being cleared ahead
+              </div>
+            )}
+            {status === 'arrived' && (
+              <div className="p-3 rounded-xl bg-primary/10 border border-primary/20 text-primary text-sm font-medium flex items-center gap-2 animate-fade-in-up">
+                <Flag className="w-4 h-4" />
+                🏥 Arrived at location — Patient pickup in progress
+              </div>
+            )}
+
             {/* Navigation Map */}
             <LiveMap
               className="h-64 md:h-80"
               showRoute
               ambulanceProgress={ambulanceProgress}
               startCoords={currentEmergency ? [currentEmergency.location_lat, currentEmergency.location_lng] : undefined}
+              endCoords={hospitalCoords || undefined}
+              ambulanceLatLng={ambulancePosition ? [ambulancePosition.lat, ambulancePosition.lng] : undefined}
+              signalMarkers={signals.map(s => ({ lat: s.lat, lng: s.lng, mode: s.mode, code: s.signal_code }))}
             />
 
             {/* Traffic Signal Strip */}
@@ -285,9 +380,11 @@ export default function AmbulanceDashboard() {
               <div className="flex items-center gap-2 mb-4">
                 <Navigation className="w-4 h-4 text-success" />
                 <h3 className="font-semibold text-sm">Traffic Signal Status</h3>
-                <StatusBadge severity="success">Green Corridor</StatusBadge>
+                <StatusBadge severity={hasGreenSignals ? "success" : "info"}>
+                  {hasGreenSignals ? "Green Corridor" : "Preparing"}
+                </StatusBadge>
               </div>
-              <div className="grid grid-cols-1 sm:grid-cols-5 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
                 {signalDisplay.map((s) => (
                   <div key={s.id} className={`flex items-center gap-3 p-3 rounded-xl border transition-all duration-500 ${
                     s.status === "green" ? "bg-success/5 border-success/20" :
@@ -299,10 +396,11 @@ export default function AmbulanceDashboard() {
                       s.status === "turning" ? "bg-warning animate-signal-blink" :
                       "bg-destructive"
                     }`} />
-                    <div className="min-w-0">
+                    <div className="min-w-0 flex-1">
                       <div className="text-sm font-medium">{s.id}</div>
                       <div className="text-[10px] text-muted-foreground truncate">{s.location}</div>
                     </div>
+                    <div className="text-[10px] text-muted-foreground font-mono">{s.distance}</div>
                   </div>
                 ))}
               </div>
@@ -337,6 +435,10 @@ export default function AmbulanceDashboard() {
                   <button className="w-full py-3 rounded-xl bg-success/10 border border-success/15 text-success text-sm font-medium flex items-center justify-center gap-2 hover:bg-success/15 transition-all active:scale-[0.98]">
                     <Phone className="w-4 h-4" /> Call Hospital
                   </button>
+                  <div className="p-3 rounded-xl bg-secondary/50 border border-border text-center">
+                    <div className="text-xs text-muted-foreground">Destination</div>
+                    <div className="text-sm font-semibold">{hospitalName || "Assigning..."}</div>
+                  </div>
                   <VoiceButton />
                 </div>
               </GlassCard>
@@ -344,11 +446,21 @@ export default function AmbulanceDashboard() {
               <GlassCard>
                 <h3 className="font-semibold text-sm mb-3">Trip Analytics</h3>
                 <MiniAnalytics metrics={[
-                  { label: "Distance Covered", value: `${distance ? (10 - distance).toFixed(1) : '0'} km`, bar: distance ? ((10 - distance) / 10) * 100 : 0, color: "bg-primary" },
-                  { label: "Signals Overridden", value: `${signals.filter(s => s.mode === "corridor").length}`, bar: (signals.filter(s => s.mode === "corridor").length / Math.max(signals.length, 1)) * 100, color: "bg-success" },
+                  { label: "Distance to Patient", value: `${distance?.toFixed(1) || '...'} km`, bar: distance ? Math.min(100, (1 - distance / 10) * 100) : 0, color: "bg-primary" },
+                  { label: "Signals Cleared", value: `${signals.filter(s => s.mode === "corridor").length}/${signals.length}`, bar: (signals.filter(s => s.mode === "corridor").length / Math.max(signals.length, 1)) * 100, color: "bg-success" },
                   { label: "Avg Speed", value: ambulancePosition?.speed ? `${Math.round(ambulancePosition.speed)} km/h` : "-- km/h", bar: ambulancePosition?.speed ? Math.min(100, (ambulancePosition.speed / 80) * 100) : 0, color: "bg-warning" },
-                  { label: "Corridor Status", value: "Active", bar: 100, color: "bg-success" },
+                  { label: "Corridor Status", value: status === "corridor" ? "Active" : status === "arrived" ? "Arrived" : "Preparing", bar: status === "corridor" ? 100 : status === "arrived" ? 100 : 30, color: status === "corridor" || status === "arrived" ? "bg-success" : "bg-muted" },
                 ]} />
+
+                {/* Manual completion button */}
+                {(status === 'arrived' || status === 'corridor' || status === 'enroute') && (
+                  <button
+                    onClick={handleComplete}
+                    className="w-full mt-4 py-3 rounded-xl bg-primary text-primary-foreground font-semibold text-sm flex items-center justify-center gap-2 hover:brightness-105 transition-all active:scale-[0.98] shadow-lg"
+                  >
+                    <Flag className="w-4 h-4" /> Mark Patient Delivered
+                  </button>
+                )}
               </GlassCard>
             </div>
           </>
