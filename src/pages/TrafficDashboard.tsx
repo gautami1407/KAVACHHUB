@@ -5,6 +5,9 @@ import { RoleHeader } from "@/components/RoleHeader";
 import { StatusBadge } from "@/components/StatusBadge";
 import { GreenCorridorScene } from "@/components/GreenCorridorScene";
 import { MiniAnalytics } from "@/components/MiniAnalytics";
+import { LiveMap } from "@/components/LiveMap";
+import { NotificationPanel } from "@/components/NotificationPanel";
+import { NetworkStatus } from "@/components/NetworkStatus";
 
 interface Signal {
   id: string;
@@ -26,10 +29,12 @@ const initialSignals: Signal[] = [
 export default function TrafficDashboard() {
   const [signals, setSignals] = useState(initialSignals);
   const [ambulanceSignal, setAmbulanceSignal] = useState(0);
+  const [ambMapPos, setAmbMapPos] = useState(10);
 
   useEffect(() => {
     const i = setInterval(() => {
       setAmbulanceSignal(p => (p + 1) % signals.length);
+      setAmbMapPos(p => Math.min(90, p + 8));
     }, 3000);
     return () => clearInterval(i);
   }, [signals.length]);
@@ -39,11 +44,16 @@ export default function TrafficDashboard() {
 
   return (
     <div className="min-h-screen bg-background">
-      <RoleHeader title="Traffic Control Center" icon={TrafficCone} />
+      <RoleHeader title="Traffic Control Center" icon={TrafficCone}>
+        <div className="flex items-center gap-2">
+          <NetworkStatus />
+          <NotificationPanel />
+        </div>
+      </RoleHeader>
 
       <div className="max-w-7xl mx-auto p-4 md:p-6 space-y-5">
         {/* Stats */}
-        <div className="grid grid-cols-3 gap-4">
+        <div className="grid grid-cols-4 gap-4">
           <GlassCard className="!p-4 text-center" hover>
             <div className="text-2xl font-black text-success">{corridorCount}</div>
             <div className="text-xs text-muted-foreground mt-1">Green Corridors</div>
@@ -56,6 +66,10 @@ export default function TrafficDashboard() {
             <div className="text-2xl font-black">{signals.length}</div>
             <div className="text-xs text-muted-foreground mt-1">Total Signals</div>
           </GlassCard>
+          <GlassCard className="!p-4 text-center" hover>
+            <div className="text-2xl font-black text-primary">14</div>
+            <div className="text-xs text-muted-foreground mt-1">Signals Overridden</div>
+          </GlassCard>
         </div>
 
         {/* 3D Corridor Visualization */}
@@ -65,12 +79,22 @@ export default function TrafficDashboard() {
             <h3 className="font-semibold text-sm">Live 3D Green Corridor</h3>
             <StatusBadge severity="success">Active</StatusBadge>
           </div>
-          <GreenCorridorScene className="h-[300px] md:h-[400px] w-full" />
+          <GreenCorridorScene className="h-[300px] md:h-[420px] w-full" />
           <div className="px-5 py-3 border-t border-border flex items-center gap-4 text-xs text-muted-foreground">
             <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-destructive" /> Ambulance</span>
             <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-success" /> Green Signal</span>
             <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-success/30" /> Corridor</span>
+            <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-warning" /> Turning</span>
           </div>
+        </GlassCard>
+
+        {/* Live Map Tracking */}
+        <GlassCard className="!p-0 overflow-hidden">
+          <div className="px-5 pt-5 pb-3 flex items-center gap-2">
+            <MapPin className="w-4 h-4 text-primary" />
+            <h3 className="font-semibold text-sm">Live Ambulance Tracking</h3>
+          </div>
+          <LiveMap className="h-[250px] md:h-[300px]" showRoute ambulanceProgress={ambMapPos} />
         </GlassCard>
 
         {/* Corridor Animation strip */}
@@ -147,6 +171,7 @@ export default function TrafficDashboard() {
               { label: "Corridors Today", value: "6", bar: 60, color: "bg-primary" },
               { label: "Avg Clear Time", value: "12s", bar: 40, color: "bg-warning" },
               { label: "System Uptime", value: "99.9%", bar: 99, color: "bg-success" },
+              { label: "Active Ambulances", value: "3", bar: 30, color: "bg-destructive" },
             ]} />
           </GlassCard>
         </div>

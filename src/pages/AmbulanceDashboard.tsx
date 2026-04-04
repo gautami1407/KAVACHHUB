@@ -1,19 +1,22 @@
 import { useState, useEffect } from "react";
-import { Ambulance, Phone, Navigation, AlertTriangle, CheckCircle, XCircle, Radio } from "lucide-react";
+import { Ambulance, Phone, Navigation, AlertTriangle, CheckCircle, XCircle, Radio, Timer, MapPin } from "lucide-react";
 import { GlassCard } from "@/components/GlassCard";
 import { RoleHeader } from "@/components/RoleHeader";
 import { StatusBadge } from "@/components/StatusBadge";
-import { MapPlaceholder } from "@/components/MapPlaceholder";
+import { LiveMap } from "@/components/LiveMap";
 import { VoiceButton } from "@/components/VoiceButton";
 import { EmergencyTimeline } from "@/components/EmergencyTimeline";
 import { SeverityIndicator } from "@/components/SeverityIndicator";
 import { MiniAnalytics } from "@/components/MiniAnalytics";
+import { NotificationPanel } from "@/components/NotificationPanel";
+import { NetworkStatus } from "@/components/NetworkStatus";
 
-const signals = [
-  { id: "S1", distance: "200m", status: "green" as const },
-  { id: "S2", distance: "800m", status: "green" as const },
-  { id: "S3", distance: "1.4km", status: "turning" as const },
-  { id: "S4", distance: "2.1km", status: "red" as const },
+const signalData = [
+  { id: "S1", location: "Sector 62 Junction", distance: "200m", status: "green" as const },
+  { id: "S2", location: "NH-24 Crossing", distance: "800m", status: "green" as const },
+  { id: "S3", location: "Metro Station", distance: "1.4km", status: "turning" as const },
+  { id: "S4", location: "Ring Road", distance: "2.1km", status: "red" as const },
+  { id: "S5", location: "Hospital Road", distance: "3.0km", status: "red" as const },
 ];
 
 export default function AmbulanceDashboard() {
@@ -22,13 +25,28 @@ export default function AmbulanceDashboard() {
   const [eta, setEta] = useState(7);
   const [distance, setDistance] = useState(4.2);
   const [ambPos, setAmbPos] = useState(5);
+  const [elapsedTime, setElapsedTime] = useState(0);
+  const [signals, setSignals] = useState(signalData);
 
   useEffect(() => {
     if (!accepted) return;
     const i = setInterval(() => {
       setEta(e => Math.max(1, e - 1));
-      setDistance(d => Math.max(0.3, +(d - 0.6).toFixed(1)));
-      setAmbPos(p => Math.min(95, p + 12));
+      setDistance(d => Math.max(0.3, +(d - 0.5).toFixed(1)));
+      setAmbPos(p => Math.min(95, p + 10));
+      setElapsedTime(t => t + 3);
+      // Progressively turn signals green
+      setSignals(prev => {
+        const next = [...prev];
+        const turningIdx = next.findIndex(s => s.status === "turning");
+        if (turningIdx !== -1 && Math.random() > 0.5) {
+          next[turningIdx] = { ...next[turningIdx], status: "green" };
+          if (turningIdx + 1 < next.length && next[turningIdx + 1].status === "red") {
+            next[turningIdx + 1] = { ...next[turningIdx + 1], status: "turning" };
+          }
+        }
+        return next;
+      });
     }, 3000);
     return () => clearInterval(i);
   }, [accepted]);
@@ -37,36 +55,47 @@ export default function AmbulanceDashboard() {
     { label: "Alert Received", status: "done" as const },
     { label: "Accepted", status: accepted ? "done" as const : "active" as const },
     { label: "En Route", status: accepted ? "active" as const : "pending" as const },
-    { label: "Corridor Active", status: "pending" as const },
+    { label: "Corridor Active", status: accepted && ambPos > 30 ? "active" as const : "pending" as const },
     { label: "Delivered", status: "pending" as const },
   ];
 
+  const formatTime = (s: number) => `${Math.floor(s / 60)}:${(s % 60).toString().padStart(2, "0")}`;
+
   return (
     <div className="min-h-screen bg-background">
-      <RoleHeader title="Ambulance Dashboard" icon={Ambulance} />
+      <RoleHeader title="Ambulance Dashboard" icon={Ambulance}>
+        <div className="flex items-center gap-2">
+          <NetworkStatus />
+          <NotificationPanel />
+        </div>
+      </RoleHeader>
 
-      {/* Incoming Alert */}
+      {/* Incoming Alert Modal */}
       {hasAlert && !accepted && (
-        <div className="mx-4 md:mx-6 mt-4 animate-fade-in-up">
-          <div className="bg-card p-5 rounded-2xl border border-destructive/20 shadow-lg shadow-destructive/5">
-            <div className="flex items-start gap-4">
-              <div className="p-3 rounded-xl bg-destructive/10">
-                <AlertTriangle className="w-6 h-6 text-destructive" />
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-foreground/20 backdrop-blur-sm p-4 animate-fade-in-up">
+          <div className="bg-card p-6 rounded-2xl border border-destructive/20 shadow-2xl max-w-md w-full">
+            <div className="flex items-start gap-4 mb-5">
+              <div className="p-3 rounded-xl bg-destructive/10 animate-sos-pulse">
+                <AlertTriangle className="w-7 h-7 text-destructive" />
               </div>
               <div className="flex-1">
-                <div className="flex items-center gap-2 mb-1">
-                  <h3 className="font-bold">Incoming Emergency</h3>
-                  <SeverityIndicator level="critical" className="!px-2 !py-1" />
+                <div className="flex items-center gap-2 mb-2">
+                  <h3 className="font-bold text-lg">Incoming Emergency</h3>
                 </div>
-                <p className="text-sm text-muted-foreground mb-1">📍 Sector 62, Noida — Cardiac Emergency</p>
-                <p className="text-xs text-muted-foreground">Patient: Male, 45 yrs | Blood: O+ | Distance: 4.2 km</p>
+                <SeverityIndicator level="critical" className="mb-3" />
+                <div className="space-y-1.5 text-sm text-muted-foreground">
+                  <p className="flex items-center gap-2"><MapPin className="w-3.5 h-3.5" /> Sector 62, Noida</p>
+                  <p>🫀 Cardiac Emergency</p>
+                  <p>👤 Male, 45 yrs · Blood: O+</p>
+                  <p>📏 Distance: 4.2 km</p>
+                </div>
               </div>
             </div>
-            <div className="flex gap-3 mt-4">
-              <button onClick={() => setAccepted(true)} className="flex-1 py-3 rounded-xl bg-success text-success-foreground font-semibold text-sm flex items-center justify-center gap-2 hover:brightness-105 transition-all active:scale-[0.98] shadow-md">
-                <CheckCircle className="w-5 h-5" /> Accept
+            <div className="flex gap-3">
+              <button onClick={() => setAccepted(true)} className="flex-1 py-3.5 rounded-xl bg-success text-success-foreground font-semibold text-sm flex items-center justify-center gap-2 hover:brightness-105 transition-all active:scale-[0.98] shadow-lg">
+                <CheckCircle className="w-5 h-5" /> Accept Mission
               </button>
-              <button onClick={() => setHasAlert(false)} className="flex-1 py-3 rounded-xl bg-secondary border border-border text-muted-foreground font-semibold text-sm flex items-center justify-center gap-2 hover:bg-accent transition-all">
+              <button onClick={() => setHasAlert(false)} className="flex-1 py-3.5 rounded-xl bg-secondary border border-border text-muted-foreground font-semibold text-sm flex items-center justify-center gap-2 hover:bg-accent transition-all">
                 <XCircle className="w-5 h-5" /> Reject
               </button>
             </div>
@@ -83,39 +112,54 @@ export default function AmbulanceDashboard() {
               <EmergencyTimeline steps={timelineSteps} />
             </GlassCard>
 
-            {/* Navigation Map */}
-            <MapPlaceholder className="h-56 md:h-72" showRoute ambulancePosition={ambPos}>
-              <div className="absolute bottom-3 left-3 bg-card/95 backdrop-blur-sm p-3 rounded-xl border border-border shadow-lg">
-                <div className="flex items-center gap-4">
-                  <div className="text-center">
-                    <div className="text-2xl font-black animate-count-pulse">{eta}</div>
-                    <div className="text-[10px] text-muted-foreground uppercase tracking-wider">min</div>
-                  </div>
-                  <div className="w-px h-10 bg-border" />
-                  <div className="text-center">
-                    <div className="text-2xl font-black">{distance}</div>
-                    <div className="text-[10px] text-muted-foreground uppercase tracking-wider">km</div>
-                  </div>
-                </div>
-              </div>
-            </MapPlaceholder>
+            {/* ETA strip */}
+            <div className="grid grid-cols-4 gap-3">
+              <GlassCard className="!p-4 text-center" hover>
+                <Timer className="w-4 h-4 text-primary mx-auto mb-1" />
+                <div className="text-2xl font-black animate-count-pulse">{eta}</div>
+                <div className="text-[10px] text-muted-foreground uppercase">ETA min</div>
+              </GlassCard>
+              <GlassCard className="!p-4 text-center" hover>
+                <Navigation className="w-4 h-4 text-primary mx-auto mb-1" />
+                <div className="text-2xl font-black">{distance}</div>
+                <div className="text-[10px] text-muted-foreground uppercase">km left</div>
+              </GlassCard>
+              <GlassCard className="!p-4 text-center" hover>
+                <Timer className="w-4 h-4 text-warning mx-auto mb-1" />
+                <div className="text-2xl font-black font-mono">{formatTime(elapsedTime)}</div>
+                <div className="text-[10px] text-muted-foreground uppercase">elapsed</div>
+              </GlassCard>
+              <GlassCard className="!p-4 text-center" hover>
+                <div className="text-2xl font-black text-success">{signals.filter(s => s.status === "green").length}</div>
+                <div className="text-[10px] text-muted-foreground uppercase">green signals</div>
+              </GlassCard>
+            </div>
 
-            {/* Traffic Signals */}
+            {/* Navigation Map */}
+            <LiveMap className="h-64 md:h-80" showRoute ambulanceProgress={ambPos} />
+
+            {/* Traffic Signal Strip */}
             <GlassCard>
               <div className="flex items-center gap-2 mb-4">
                 <Navigation className="w-4 h-4 text-success" />
                 <h3 className="font-semibold text-sm">Traffic Signal Status</h3>
                 <StatusBadge severity="success">Green Corridor</StatusBadge>
               </div>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-5 gap-3">
                 {signals.map((s) => (
-                  <div key={s.id} className="flex items-center gap-3 p-3 rounded-xl bg-secondary/50 border border-border">
-                    <div className={`w-4 h-4 rounded-full ${
-                      s.status === "green" ? "bg-success" : s.status === "turning" ? "bg-warning animate-signal-blink" : "bg-destructive"
+                  <div key={s.id} className={`flex items-center gap-3 p-3 rounded-xl border transition-all duration-500 ${
+                    s.status === "green" ? "bg-success/5 border-success/20" :
+                    s.status === "turning" ? "bg-warning/5 border-warning/20" :
+                    "bg-secondary/50 border-border"
+                  }`}>
+                    <div className={`w-4 h-4 rounded-full shrink-0 transition-all ${
+                      s.status === "green" ? "bg-success shadow-sm shadow-success/50" :
+                      s.status === "turning" ? "bg-warning animate-signal-blink" :
+                      "bg-destructive"
                     }`} />
-                    <div>
+                    <div className="min-w-0">
                       <div className="text-sm font-medium">{s.id}</div>
-                      <div className="text-xs text-muted-foreground">{s.distance}</div>
+                      <div className="text-[10px] text-muted-foreground truncate">{s.location}</div>
                     </div>
                   </div>
                 ))}
@@ -135,6 +179,7 @@ export default function AmbulanceDashboard() {
                   <Row label="Blood Group" value="O+" />
                   <Row label="Condition" value="Cardiac Arrest" />
                   <Row label="Allergies" value="Penicillin" />
+                  <Row label="Emergency ID" value="JS-2024-8847" />
                 </div>
               </GlassCard>
 
@@ -144,10 +189,10 @@ export default function AmbulanceDashboard() {
                   <h3 className="font-semibold text-sm">Communication</h3>
                 </div>
                 <div className="space-y-3">
-                  <button className="w-full py-3 rounded-xl bg-primary/10 border border-primary/15 text-primary text-sm font-medium flex items-center justify-center gap-2 hover:bg-primary/15 transition-all">
+                  <button className="w-full py-3 rounded-xl bg-primary/10 border border-primary/15 text-primary text-sm font-medium flex items-center justify-center gap-2 hover:bg-primary/15 transition-all active:scale-[0.98]">
                     <Phone className="w-4 h-4" /> Call Patient Contact
                   </button>
-                  <button className="w-full py-3 rounded-xl bg-success/10 border border-success/15 text-success text-sm font-medium flex items-center justify-center gap-2 hover:bg-success/15 transition-all">
+                  <button className="w-full py-3 rounded-xl bg-success/10 border border-success/15 text-success text-sm font-medium flex items-center justify-center gap-2 hover:bg-success/15 transition-all active:scale-[0.98]">
                     <Phone className="w-4 h-4" /> Call Hospital
                   </button>
                   <VoiceButton />
@@ -158,8 +203,9 @@ export default function AmbulanceDashboard() {
                 <h3 className="font-semibold text-sm mb-3">Trip Analytics</h3>
                 <MiniAnalytics metrics={[
                   { label: "Distance Covered", value: `${(4.2 - distance).toFixed(1)} km`, bar: ((4.2 - distance) / 4.2) * 100, color: "bg-primary" },
-                  { label: "Signals Overridden", value: "2", bar: 50, color: "bg-success" },
+                  { label: "Signals Overridden", value: `${signals.filter(s => s.status === "green").length}`, bar: (signals.filter(s => s.status === "green").length / signals.length) * 100, color: "bg-success" },
                   { label: "Avg Speed", value: "48 km/h", bar: 65, color: "bg-warning" },
+                  { label: "Corridor Status", value: "Active", bar: 100, color: "bg-success" },
                 ]} />
               </GlassCard>
             </div>
