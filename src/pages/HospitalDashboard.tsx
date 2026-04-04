@@ -1,8 +1,10 @@
 import { useState, useEffect } from "react";
-import { Hospital, Bed, Users, BarChart3, Bell, Clock, UserCheck, AlertTriangle, TrendingUp, Activity } from "lucide-react";
+import { Hospital, Bed, Users, BarChart3, Bell, Clock, AlertTriangle, TrendingUp, Activity } from "lucide-react";
 import { GlassCard } from "@/components/GlassCard";
 import { RoleHeader } from "@/components/RoleHeader";
 import { StatusBadge } from "@/components/StatusBadge";
+import { MiniAnalytics } from "@/components/MiniAnalytics";
+import { PrivacyToggle } from "@/components/PrivacyToggle";
 
 const patients = [
   { id: 1, name: "Amit Verma", age: 45, condition: "Cardiac Arrest", severity: "critical" as const, eta: "4 min" },
@@ -30,6 +32,7 @@ export default function HospitalDashboard() {
   const [casesToday] = useState(47);
   const [avgResponse] = useState("6.2 min");
   const [successRate] = useState("94.8%");
+  const [privacy, setPrivacy] = useState(false);
 
   useEffect(() => {
     const i = setInterval(() => {
@@ -43,6 +46,11 @@ export default function HospitalDashboard() {
       <RoleHeader title="Hospital Command Center" icon={Hospital} />
 
       <div className="max-w-7xl mx-auto p-4 md:p-6 space-y-5">
+        {/* Top bar */}
+        <div className="flex justify-end">
+          <PrivacyToggle enabled={privacy} onToggle={() => setPrivacy(!privacy)} />
+        </div>
+
         {/* Stats */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <StatCard icon={Bed} label="ICU Available" value={`${icuBeds.available}/${icuBeds.total}`} color="text-destructive" pulse />
@@ -65,13 +73,13 @@ export default function HospitalDashboard() {
               <div className="space-y-2">
                 {patients.map((p, i) => (
                   <div key={p.id} className={`flex items-center justify-between p-3 rounded-xl border transition-all animate-fade-in-up ${
-                    p.severity === "critical" ? "bg-destructive/5 border-destructive/20" : "bg-secondary/50 border-border"
+                    p.severity === "critical" ? "bg-destructive/5 border-destructive/15" : "bg-secondary/50 border-border"
                   }`} style={{ animationDelay: `${i * 0.1}s` }}>
                     <div className="flex items-center gap-3">
                       <div className="w-9 h-9 rounded-full bg-secondary flex items-center justify-center text-sm font-bold text-muted-foreground">
                         {p.name[0]}
                       </div>
-                      <div>
+                      <div className={privacy ? "blur-sm select-none" : ""}>
                         <div className="text-sm font-medium">{p.name}, {p.age}</div>
                         <div className="text-xs text-muted-foreground">{p.condition}</div>
                       </div>
@@ -97,8 +105,8 @@ export default function HospitalDashboard() {
             <div className="space-y-3">
               {alerts.map((a, i) => (
                 <div key={i} className={`p-3 rounded-xl border text-sm animate-fade-in-up ${
-                  a.type === "emergency" ? "bg-destructive/5 border-destructive/20" :
-                  a.type === "success" ? "bg-success/5 border-success/20" : "bg-primary/5 border-primary/20"
+                  a.type === "emergency" ? "bg-destructive/5 border-destructive/15" :
+                  a.type === "success" ? "bg-success/5 border-success/15" : "bg-primary/5 border-primary/15"
                 }`} style={{ animationDelay: `${i * 0.1}s` }}>
                   <p className="text-sm">{a.msg}</p>
                   <p className="text-[10px] text-muted-foreground mt-1">{a.time}</p>
@@ -135,12 +143,12 @@ export default function HospitalDashboard() {
               <BarChart3 className="w-4 h-4 text-primary" />
               <h3 className="font-semibold text-sm">Analytics</h3>
             </div>
-            <div className="space-y-4">
-              <AnalyticsRow label="Avg Response Time" value={avgResponse} bar={62} color="bg-primary" />
-              <AnalyticsRow label="Cases Today" value={casesToday.toString()} bar={47} color="bg-warning" />
-              <AnalyticsRow label="Success Rate" value={successRate} bar={95} color="bg-success" />
-              <AnalyticsRow label="Bed Utilization" value="82%" bar={82} color="bg-destructive" />
-            </div>
+            <MiniAnalytics metrics={[
+              { label: "Avg Response Time", value: avgResponse, bar: 62, color: "bg-primary" },
+              { label: "Cases Today", value: casesToday.toString(), bar: 47, color: "bg-warning" },
+              { label: "Success Rate", value: successRate, bar: 95, color: "bg-success" },
+              { label: "Bed Utilization", value: "82%", bar: 82, color: "bg-destructive" },
+            ]} />
           </GlassCard>
         </div>
       </div>
@@ -157,19 +165,5 @@ function StatCard({ icon: Icon, label, value, color, pulse }: { icon: React.Elem
       </div>
       <div className={`text-2xl font-black ${pulse ? "animate-count-pulse" : ""}`}>{value}</div>
     </GlassCard>
-  );
-}
-
-function AnalyticsRow({ label, value, bar, color }: { label: string; value: string; bar: number; color: string }) {
-  return (
-    <div>
-      <div className="flex justify-between text-sm mb-1.5">
-        <span className="text-muted-foreground">{label}</span>
-        <span className="font-semibold">{value}</span>
-      </div>
-      <div className="h-2 bg-secondary rounded-full overflow-hidden">
-        <div className={`h-full rounded-full transition-all duration-1000 ${color}`} style={{ width: `${bar}%` }} />
-      </div>
-    </div>
   );
 }

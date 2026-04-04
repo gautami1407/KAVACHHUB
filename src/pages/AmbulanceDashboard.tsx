@@ -1,10 +1,13 @@
 import { useState, useEffect } from "react";
-import { Ambulance, Phone, Clock, MapPin, Navigation, AlertTriangle, CheckCircle, XCircle, Radio, ChevronRight } from "lucide-react";
+import { Ambulance, Phone, Navigation, AlertTriangle, CheckCircle, XCircle, Radio } from "lucide-react";
 import { GlassCard } from "@/components/GlassCard";
 import { RoleHeader } from "@/components/RoleHeader";
 import { StatusBadge } from "@/components/StatusBadge";
 import { MapPlaceholder } from "@/components/MapPlaceholder";
 import { VoiceButton } from "@/components/VoiceButton";
+import { EmergencyTimeline } from "@/components/EmergencyTimeline";
+import { SeverityIndicator } from "@/components/SeverityIndicator";
+import { MiniAnalytics } from "@/components/MiniAnalytics";
 
 const signals = [
   { id: "S1", distance: "200m", status: "green" as const },
@@ -30,6 +33,14 @@ export default function AmbulanceDashboard() {
     return () => clearInterval(i);
   }, [accepted]);
 
+  const timelineSteps = [
+    { label: "Alert Received", status: "done" as const },
+    { label: "Accepted", status: accepted ? "done" as const : "active" as const },
+    { label: "En Route", status: accepted ? "active" as const : "pending" as const },
+    { label: "Corridor Active", status: "pending" as const },
+    { label: "Delivered", status: "pending" as const },
+  ];
+
   return (
     <div className="min-h-screen bg-background">
       <RoleHeader title="Ambulance Dashboard" icon={Ambulance} />
@@ -37,22 +48,22 @@ export default function AmbulanceDashboard() {
       {/* Incoming Alert */}
       {hasAlert && !accepted && (
         <div className="mx-4 md:mx-6 mt-4 animate-fade-in-up">
-          <div className="glass-card p-5 border-destructive/40 bg-destructive/5">
+          <div className="bg-card p-5 rounded-2xl border border-destructive/20 shadow-lg shadow-destructive/5">
             <div className="flex items-start gap-4">
-              <div className="p-3 rounded-xl bg-destructive/20">
+              <div className="p-3 rounded-xl bg-destructive/10">
                 <AlertTriangle className="w-6 h-6 text-destructive" />
               </div>
               <div className="flex-1">
                 <div className="flex items-center gap-2 mb-1">
                   <h3 className="font-bold">Incoming Emergency</h3>
-                  <StatusBadge severity="critical">Critical</StatusBadge>
+                  <SeverityIndicator level="critical" className="!px-2 !py-1" />
                 </div>
                 <p className="text-sm text-muted-foreground mb-1">📍 Sector 62, Noida — Cardiac Emergency</p>
                 <p className="text-xs text-muted-foreground">Patient: Male, 45 yrs | Blood: O+ | Distance: 4.2 km</p>
               </div>
             </div>
             <div className="flex gap-3 mt-4">
-              <button onClick={() => { setAccepted(true); }} className="flex-1 py-3 rounded-xl bg-success text-success-foreground font-semibold text-sm flex items-center justify-center gap-2 hover:brightness-110 transition-all active:scale-[0.98]">
+              <button onClick={() => setAccepted(true)} className="flex-1 py-3 rounded-xl bg-success text-success-foreground font-semibold text-sm flex items-center justify-center gap-2 hover:brightness-105 transition-all active:scale-[0.98] shadow-md">
                 <CheckCircle className="w-5 h-5" /> Accept
               </button>
               <button onClick={() => setHasAlert(false)} className="flex-1 py-3 rounded-xl bg-secondary border border-border text-muted-foreground font-semibold text-sm flex items-center justify-center gap-2 hover:bg-accent transition-all">
@@ -66,17 +77,23 @@ export default function AmbulanceDashboard() {
       <div className="max-w-6xl mx-auto p-4 md:p-6 space-y-5">
         {accepted && (
           <>
+            {/* Timeline */}
+            <GlassCard className="animate-fade-in-up">
+              <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-4">Mission Timeline</h3>
+              <EmergencyTimeline steps={timelineSteps} />
+            </GlassCard>
+
             {/* Navigation Map */}
             <MapPlaceholder className="h-56 md:h-72" showRoute ambulancePosition={ambPos}>
-              <div className="absolute bottom-3 left-3 glass-card p-3 !rounded-xl">
+              <div className="absolute bottom-3 left-3 bg-card/95 backdrop-blur-sm p-3 rounded-xl border border-border shadow-lg">
                 <div className="flex items-center gap-4">
                   <div className="text-center">
-                    <div className="text-2xl font-black text-foreground animate-count-pulse">{eta}</div>
+                    <div className="text-2xl font-black animate-count-pulse">{eta}</div>
                     <div className="text-[10px] text-muted-foreground uppercase tracking-wider">min</div>
                   </div>
                   <div className="w-px h-10 bg-border" />
                   <div className="text-center">
-                    <div className="text-2xl font-black text-foreground">{distance}</div>
+                    <div className="text-2xl font-black">{distance}</div>
                     <div className="text-[10px] text-muted-foreground uppercase tracking-wider">km</div>
                   </div>
                 </div>
@@ -86,7 +103,7 @@ export default function AmbulanceDashboard() {
             {/* Traffic Signals */}
             <GlassCard>
               <div className="flex items-center gap-2 mb-4">
-                <Navigation className="w-4 h-4 text-corridor" />
+                <Navigation className="w-4 h-4 text-success" />
                 <h3 className="font-semibold text-sm">Traffic Signal Status</h3>
                 <StatusBadge severity="success">Green Corridor</StatusBadge>
               </div>
@@ -105,8 +122,8 @@ export default function AmbulanceDashboard() {
               </div>
             </GlassCard>
 
-            {/* Patient Info & Comms */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+            {/* Patient Info & Comms & Analytics */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
               <GlassCard>
                 <div className="flex items-center gap-2 mb-3">
                   <Radio className="w-4 h-4 text-primary" />
@@ -127,14 +144,23 @@ export default function AmbulanceDashboard() {
                   <h3 className="font-semibold text-sm">Communication</h3>
                 </div>
                 <div className="space-y-3">
-                  <button className="w-full py-3 rounded-xl bg-primary/10 border border-primary/20 text-primary text-sm font-medium flex items-center justify-center gap-2 hover:bg-primary/20 transition-all">
+                  <button className="w-full py-3 rounded-xl bg-primary/10 border border-primary/15 text-primary text-sm font-medium flex items-center justify-center gap-2 hover:bg-primary/15 transition-all">
                     <Phone className="w-4 h-4" /> Call Patient Contact
                   </button>
-                  <button className="w-full py-3 rounded-xl bg-success/10 border border-success/20 text-success text-sm font-medium flex items-center justify-center gap-2 hover:bg-success/20 transition-all">
+                  <button className="w-full py-3 rounded-xl bg-success/10 border border-success/15 text-success text-sm font-medium flex items-center justify-center gap-2 hover:bg-success/15 transition-all">
                     <Phone className="w-4 h-4" /> Call Hospital
                   </button>
                   <VoiceButton />
                 </div>
+              </GlassCard>
+
+              <GlassCard>
+                <h3 className="font-semibold text-sm mb-3">Trip Analytics</h3>
+                <MiniAnalytics metrics={[
+                  { label: "Distance Covered", value: `${(4.2 - distance).toFixed(1)} km`, bar: ((4.2 - distance) / 4.2) * 100, color: "bg-primary" },
+                  { label: "Signals Overridden", value: "2", bar: 50, color: "bg-success" },
+                  { label: "Avg Speed", value: "48 km/h", bar: 65, color: "bg-warning" },
+                ]} />
               </GlassCard>
             </div>
           </>
