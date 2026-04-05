@@ -65,7 +65,67 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         await supabase.from('patients').insert({
           user_id: data.user.id,
           emergency_id_code: emergencyCode,
-        });
+        } as any);
+      } else if (role === 'hospital') {
+        const { data: newHospital } = await supabase.from('hospitals').insert({
+          name: fullName + " Hospital",
+          lat: 19.0760,
+          lng: 72.8777,
+          phone: "9999999999",
+          icu_beds_total: 20,
+          icu_beds_available: 5,
+          general_beds_total: 100,
+          general_beds_available: 45,
+          emergency_beds_total: 10,
+          emergency_beds_available: 3
+        } as any).select().single() as any;
+
+        if (newHospital) {
+          // Add some dummy doctors for the staff allocation visuals
+          await supabase.from('doctors').insert([
+            { hospital_id: newHospital.id, name: 'Dr. Sharma', specialty: 'Cardiologist', status: 'available' },
+            { hospital_id: newHospital.id, name: 'Dr. Gupta', specialty: 'Neurologist', status: 'busy' },
+            { hospital_id: newHospital.id, name: 'Dr. Patel', specialty: 'Orthopedics', status: 'available' },
+            { hospital_id: newHospital.id, name: 'Dr. Reddy', specialty: 'General Surgery', status: 'busy' },
+          ] as any);
+
+          // Create a dummy emergency to populate 'Incoming Patients'
+          const { data: dummyAmbulance } = await supabase.from('ambulances').insert({
+            unit_code: `AMB-${Math.floor(100 + Math.random() * 900)}`,
+            status: 'enroute',
+            lat: 19.0600,
+            lng: 72.8900,
+            current_speed: 60
+          } as any).select().single() as any;
+
+          await supabase.from('emergencies').insert({
+            hospital_id: newHospital.id,
+            ambulance_id: dummyAmbulance?.id,
+            severity: 'critical',
+            emergency_type: 'Cardiac Arrest',
+            status: 'enroute',
+            location_lat: 19.0500,
+            location_lng: 72.9000,
+            location_text: "Near BKC Junction",
+            triggered_at: new Date().toISOString()
+          } as any);
+        }
+      } else if (role === 'ambulance') {
+        await supabase.from('ambulances').insert({
+          unit_code: `AMB-${Math.floor(100 + Math.random() * 900)}`,
+          driver_id: data.user.id,
+          status: 'available',
+          lat: 19.0760,
+          lng: 72.8777,
+        } as any);
+      } else if (role === 'traffic') {
+        await supabase.from('traffic_signals').insert({
+          signal_code: `SIG-${Math.floor(100 + Math.random() * 900)}`,
+          location: "Main Junction",
+          lat: 19.0760,
+          lng: 72.8777,
+          mode: 'normal'
+        } as any);
       }
     }
     return { error: null };
